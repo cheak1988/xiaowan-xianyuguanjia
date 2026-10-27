@@ -163,6 +163,23 @@ test('预览清单过期后拒绝导入，默认全量同步仍一次导入全�
   assert.equal(f.store.getAccount(owner.id).seller_uid, '11112222');
 });
 
+test('未读完的空扫描不能预览或覆盖本地商品', async (t) => {
+  const electron = fakeElectron(), f = fixture(t, { electron: electron.electron });
+  const owner = f.store.addAccount('店铺');
+  f.store.upsertProduct(owner.id, { item_id: '100000001', title: '已有商品', price: '12.00', status: 'on_sale' });
+  const service = f.load('src/main/product-service.js').createProductService({ store: f.store, views: new Map(), parent: () => null });
+  const view = service.ensureView(owner.id);
+  view.webContents.session.cookies.get = async () => [{ name: 'unb', value: '11112222' }];
+  const pending = service.scanPreview(owner.id);
+  await new Promise((resolve) => setImmediate(resolve));
+  const { requestId } = view.webContents.sent.at(-1).payload;
+  electron.ipcMain.emit('product:response', { sender: view.webContents, senderFrame: view.webContents.mainFrame },
+    { requestId, ok: true, complete: false, products: [] });
+  const result = await pending;
+  assert.equal(result.ok, false); assert.match(result.error, /未完成读取/);
+  assert.equal(result.scanId, undefined); assert.equal(f.store.listProducts(owner.id).length, 1);
+});
+
 test('商品 IPC 按请求 ID、窗口与主框架核对，其他店铺不能伪造同步结果', async (t) => {
   const electron = fakeElectron(), f = fixture(t, { electron: electron.electron });
   const a = f.store.addAccount('A'), b = f.store.addAccount('B');

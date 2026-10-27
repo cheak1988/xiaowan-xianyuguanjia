@@ -12,7 +12,7 @@ if (!process.versions.electron) {
 const { app, BrowserWindow, session, dialog, nativeImage } = require('electron');
 const fs = require('fs'), path = require('path'), os = require('os'), assert = require('assert/strict');
 const root = path.join(__dirname, '..');
-const outputDirectory = require('../package.json').build.directories.output;
+const outputDirectory = process.env.XIANYU_VERIFY_OUTPUT || require('../package.json').build.directories.output;
 const source = process.argv.includes('--packed') ? path.join(root, outputDirectory, 'win-unpacked/resources/app.asar') : root;
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'xianyu-products-check-'));
 const output = path.join(root, '_bench', 'product-ui'); fs.mkdirSync(output, { recursive: true });
@@ -30,7 +30,7 @@ const aiServer = require('http').createServer(async (request, response) => {
   response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ title: '演示 · 桌面收纳盒 分区整理', description: '奶白色桌面收纳盒，分区整理。具体尺寸以实际商品为准。' }) } }] }));
 });
 const aiReady = new Promise((resolve) => aiServer.listen(0, '127.0.0.1', resolve));
-let skuSupported = false;
+let skuSupported = false, profileMode = 'normal';
 let responseMode = 'success', nextId = 900000000010, checked = false;
 const catalog = {
   '11112222': [{ item_id: '100000000001', title: '演示 · 桌面收纳盒', price: '29.90', status: 'on_sale' },
@@ -54,10 +54,12 @@ function pass(name) { checks.push(name); console.log('PASS ' + name); }
 function html(body) { return '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><body>' + body + '</body></html>'; }
 function profilePage(uid) {
   const list = catalog[uid] || [], on = list.filter((item) => item.status === 'on_sale').length, sold = list.length - on;
-  return html(`<section data-owned-product-list><div class="filterTab--fixture"><div data-product-tab data-status="all">综合</div><div data-product-tab data-status="on_sale">在售${on}</div><div data-product-tab data-status="sold">已售出${sold}</div></div><div id="owned"></div></section>
+  const mode = profileMode, pending = ['delayed', 'missing-counts'].includes(mode);
+  const countLabel = (count) => pending || (mode === 'hidden-zero' && count === 0) ? '' : count;
+  return html(`<section data-owned-product-list><div class="filterTab--fixture"><div data-product-tab data-status="all">综合</div><div data-product-tab data-status="on_sale">在售${countLabel(on)}</div><div data-product-tab data-status="sold">已售出${countLabel(sold)}</div></div><div id="owned"></div></section>
   <aside><a class="feeds-item-wrap--recommendation" href="https://www.goofish.com/item?id=999999999999"><span data-product-title>其他人的推荐商品</span><span data-product-price>¥ 999</span></a></aside>
-  <script>const items=${JSON.stringify(list)};function render(status){document.querySelector('#owned').innerHTML=items.filter(i=>status==='all'||i.status===status).map(i=>'<a class="feeds-item-wrap--fixture" href="https://www.goofish.com/item?id='+i.item_id+'"><span data-product-title>'+i.title+'</span><span data-product-price>¥ '+i.price+'</span><div class="feeds-image-container--fixture"><img src="https://img.alicdn.com/fixture/tps-2-2.png"><img src="https://img.alicdn.com/fixture/card.png"></div></a>').join('');const first=document.querySelector('#owned .feeds-image-container--fixture');if(first){first.innerHTML='<img src="https://img.alicdn.com/fixture/tps-2-2.png">';first.__reactProps$fixture={children:[{props:{src:'http://img.alicdn.com/fixture/card.png',enableLazyLoad:true}}]}}};
-  document.querySelectorAll('[data-product-tab]').forEach(t=>t.onclick=()=>setTimeout(()=>render(t.dataset.status),60));render('all');</script>`);
+  <script>const items=${JSON.stringify(list)},mode=${JSON.stringify(mode)};let loaded=${!pending};function render(status){const rows=(!loaded||mode==='list-error'||(mode==='late-login'&&status!=='all'))?[]:items.filter(i=>status==='all'||i.status===status);document.querySelector('#owned').innerHTML=rows.map(i=>'<a class="feeds-item-wrap--fixture" href="https://www.goofish.com/item?id='+i.item_id+'"><span data-product-title>'+i.title+'</span><span data-product-price>¥ '+i.price+'</span><div class="feeds-image-container--fixture"><img src="https://img.alicdn.com/fixture/tps-2-2.png"><img src="https://img.alicdn.com/fixture/card.png"></div></a>').join('')||(mode==='list-error'?'<div>暂无商品</div>':'<div data-product-empty>暂无商品</div>');const first=document.querySelector('#owned .feeds-image-container--fixture');if(first){first.innerHTML='<img src="https://img.alicdn.com/fixture/tps-2-2.png">';first.__reactProps$fixture={children:[{props:{src:'http://img.alicdn.com/fixture/card.png',enableLazyLoad:true}}]}}};
+  document.querySelectorAll('[data-product-tab]').forEach(t=>t.onclick=()=>setTimeout(()=>{render(t.dataset.status);if(mode==='late-login'&&t.dataset.status!=='all'){setTimeout(()=>{const login=document.createElement('iframe');login.src='/mini_login';login.style='width:400px;height:300px';document.body.append(login)},200)}},60));render('all');if(mode==='delayed')setTimeout(()=>{loaded=true;document.querySelector('[data-status=on_sale]').textContent='在售'+items.filter(i=>i.status==='on_sale').length;document.querySelector('[data-status=sold]').textContent='已售出'+items.filter(i=>i.status==='sold').length;render('all')},1200);</script>`);
 }
 function publishPage(itemId) {
   const item = Object.values(catalog).flat().find((row) => row.item_id === itemId);
@@ -138,6 +140,34 @@ app.on('web-contents-created', (_event, contents) => {
       result = await evaluate('window.api.products.sync(2)');
       assert.equal(result.ok, true, result.error); assert.equal(store.listProducts(2).length, 1);
       assert.equal(store.listProducts(1).length, 2); pass('两家店铺商品和登录分区独立');
+      profileMode = 'hidden-zero';
+      result = await evaluate('window.api.products.scanPreview(2)');
+      assert.equal(result.ok, true, result.error); assert.equal(result.count, 1); assert.equal(result.complete, true);
+      pass('官方已售零件时省略数字，仍能读取在售商品且不混入推荐');
+      profileMode = 'delayed';
+      result = await evaluate('window.api.products.scanPreview(1)');
+      assert.equal(result.ok, true, result.error); assert.equal(result.count, 2);
+      pass('等待异步商品数量和列表加载，不把初始空占位当成空店铺');
+      profileMode = 'late-login';
+      result = await evaluate('window.api.products.scanPreview(1)');
+      assert.equal(result.ok, false); assert.equal(result.code, 'LOGIN_REQUIRED');
+      assert.equal(store.listProducts(1).length, 2);
+      pass('切换在售筛选后出现登录框，立即提示重新登录且保留已有商品');
+      profileMode = 'list-error';
+      result = await evaluate('window.api.products.scanPreview(1)');
+      assert.equal(result.ok, false); assert.match(result.error, /未完成读取/);
+      assert.equal(store.listProducts(1).length, 2);
+      pass('商品数量非零但列表读取失败，不伪报零商品或采集推荐商品');
+      profileMode = 'missing-counts';
+      result = await evaluate('window.api.products.scanPreview(1)');
+      assert.equal(result.ok, false); assert.match(result.error, /商品数量/);
+      pass('未加载数量时显示同步失败，不把暂无商品当成成功');
+      profileMode = 'normal';
+      const originalCatalog = catalog['11112222']; catalog['11112222'] = [];
+      result = await evaluate('window.api.products.scanPreview(1)');
+      assert.equal(result.ok, true, result.error); assert.equal(result.count, 0); assert.equal(result.complete, true);
+      assert.equal(store.listProducts(1).length, 2); catalog['11112222'] = originalCatalog;
+      pass('明确在售零件、已售零件时确认空店铺，保留本地历史商品');
       catalog['11112222'][0].price = '49.90';
       catalog['11112222'].push({ item_id: '100000000003', title: '演示 · 新上架商品', price: '9.90', status: 'on_sale' });
       const preview = await evaluate('window.api.products.scanPreview(1)');

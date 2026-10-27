@@ -39,7 +39,7 @@ document.addEventListener('submit', (event) => {
   if (managedSubmission && !allowSubmit) { event.preventDefault(); event.stopImmediatePropagation(); }
 }, true);
 function loggedOut() {
-  return Array.from(document.querySelectorAll('iframe[src*="mini_login"],iframe[src*="login.taobao"]')).some(visible) || location.pathname === '/login';
+  return Array.from(document.querySelectorAll('iframe[src*="mini_login"],iframe[src*="login.taobao"],[class*="login-iframe-wrap"]')).some(visible) || location.pathname === '/login';
 }
 function profileIdentity(uid) {
   return location.hostname === 'www.goofish.com' && location.pathname === '/personal'
@@ -69,44 +69,60 @@ function productCard(node, status = 'unknown') {
     status, source_url: 'https://www.goofish.com/item?id=' + id };
 }
 function profileTabs() { return Array.from(document.querySelectorAll('[class*="filterTab"] [class*="tabItem"],[data-product-tab]')); }
-const cards = () => {
+function profileList() {
   const selector = 'a[class*="feeds-item-wrap"][href*="/item?"],[data-owned-product]';
   let root = document.querySelector('[class*="filterTab"],[data-owned-product-list]');
   if (!root?.matches('[data-owned-product-list]')) root = root?.parentElement;
   while (root && root !== document.body) {
-    if (root.querySelector(selector)) return Array.from(root.querySelectorAll(selector));
-    if (root.matches('[data-owned-product-list]')) return [];
+    // Stop at the shop's own empty list instead of climbing into recommendations.
+    if (root.matches('[data-owned-product-list]') || root.querySelector(selector + ',[class*="feeds-list-empty"],[data-product-empty]')) return root;
     root = root.parentElement;
   }
-  return [];
-};
+  return null;
+}
+const cards = () => Array.from(profileList()?.querySelectorAll('a[class*="feeds-item-wrap"][href*="/item?"],[data-owned-product]') || []);
+function emptyProfileList() {
+  return Array.from(profileList()?.querySelectorAll('[class*="feeds-list-empty"],[data-product-empty]') || [])
+    .some((node) => visible(node) && /^暂无商品$/.test(text(node)));
+}
+const scanTabs = [['on_sale', /^在售\s*(\d+)?$/], ['sold', /^已售出\s*(\d+)?$/]];
 async function scanProfile(payload) {
   if (!profileIdentity(payload.userId)) return { ok: false, code: 'WRONG_ACCOUNT', error: '当前页面不是该店铺的个人主页，已停止同步' };
-  const ready = await waitFor(() => profileTabs().length && !loggedOut());
+  // The tabs and "暂无商品" render before their request completes. Missing counts
+  // mean loading/request failure, not an authoritative zero-product response.
+  const ready = await waitFor(() => {
+    const tabs = scanTabs.map(([, pattern]) => profileTabs().find((tab) => pattern.test(text(tab))));
+    // Official tabs hide the number when a status has zero items. At least one
+    // explicit count must arrive before a numberless sibling can mean zero.
+    return !loggedOut() && tabs.every(Boolean) && tabs.some((tab) => /\d+$/.test(text(tab)));
+  });
   if (loggedOut()) return { ok: false, code: 'LOGIN_REQUIRED', error: '店铺登录已失效，请在打开的闲鱼窗口扫码登录后重试' };
-  if (!ready) return { ok: false, code: 'PAGE_CHANGED', error: '个人主页未加载出商品列表，请打开店铺主页检查网络或验证提示' };
+  if (!ready) return { ok: false, code: 'PAGE_CHANGED', error: '个人主页未加载出商品数量，请打开店铺主页检查登录、网络或验证提示；未改动已有商品' };
   const tabs = profileTabs();
   cardImageSources.clear();
   const products = new Map();
   const deadline = Date.now() + 65000;
   let complete = true, authoritativeEmpty = true;
   const activeTab = tabs.find((tab) => /active/.test(tab.className));
-  for (const [status, pattern] of [['on_sale', /^在售\s*(\d+)?$/], ['sold', /^已售出\s*(\d+)?$/]]) {
-    const tab = tabs.find((candidate) => pattern.test(text(candidate)));
+  for (const [status, pattern] of scanTabs) {
+    const tab = profileTabs().find((candidate) => pattern.test(text(candidate)));
     if (!tab) { complete = false; authoritativeEmpty = false; continue; }
-    const expected = Number((text(tab).match(pattern) || [])[1]);
+    const expected = Number((text(tab).match(pattern) || [])[1] || 0);
     if (expected !== 0) authoritativeEmpty = false;
     const before = cards().map((node) => node.href).join('|');
-    const otherPattern = status === 'on_sale' ? /^已售出\s*(\d+)$/ : /^在售\s*(\d+)$/;
-    const otherCount = Number(text(tabs.find((candidate) => otherPattern.test(text(candidate)))).match(otherPattern)?.[1]);
+    const otherPattern = status === 'on_sale' ? /^已售出\s*(\d+)?$/ : /^在售\s*(\d+)?$/;
+    const otherCount = Number(text(profileTabs().find((candidate) => otherPattern.test(text(candidate)))).match(otherPattern)?.[1] || 0);
     const sameItemsAllowed = /active/.test(tab.className) || tab.getAttribute('aria-selected') === 'true' || otherCount === 0;
     tab.click();
     const changed = await waitFor(() => {
+      if (loggedOut() || !profileIdentity(payload.userId)) return true;
       const nodes = cards();
       const newItems = nodes.map((node) => node.href).join('|') !== before;
-      return Number.isFinite(expected) && expected <= 20 ? nodes.length === expected && (newItems || expected === 0 || sameItemsAllowed)
+      return Number.isFinite(expected) && expected <= 20 ? nodes.length === expected && (expected === 0 ? emptyProfileList() : newItems || sameItemsAllowed)
         : nodes.length > 0 && (newItems || sameItemsAllowed);
     }, 6000);
+    if (loggedOut()) return { ok: false, code: 'LOGIN_REQUIRED', error: '店铺登录已失效，请在打开的闲鱼窗口扫码登录后重试' };
+    if (!profileIdentity(payload.userId)) return { ok: false, code: 'WRONG_ACCOUNT', error: '同步过程中页面发生变化，未改动已有商品；请重试' };
     if (!changed) { complete = false; continue; }
     await pause(350); window.scrollTo(0, 0);
     let stable = 0, previous = -1, captured = 0;
@@ -129,9 +145,8 @@ async function scanProfile(payload) {
   }
   if (activeTab?.isConnected) activeTab.click();
   window.scrollTo(0, 0);
-  const emptyMessage = Array.from(document.querySelectorAll('[class*=empty],div,span')).some((node) => node.childElementCount === 0 && /^暂无商品$/.test(text(node)) && visible(node));
-  if (!products.size && !authoritativeEmpty && !emptyMessage) return { ok: false, error: '未能确认店铺为空，未改动已有商品；请打开店铺主页核对' };
-  if (!products.size && emptyMessage) complete = true;
+  if (loggedOut()) return { ok: false, code: 'LOGIN_REQUIRED', error: '店铺登录已失效，请在打开的闲鱼窗口扫码登录后重试' };
+  if (!products.size && (!authoritativeEmpty || !complete)) return { ok: false, error: '商品列表未完成读取，不能确认为空店铺；未改动已有商品，请打开店铺主页检查登录或网络' };
   return { ok: true, products: Array.from(products.values()), complete,
     scope: '个人主页：在售和已售出商品；不包含平台隐藏的下架商品' };
 }

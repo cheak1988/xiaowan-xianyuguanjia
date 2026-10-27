@@ -1,6 +1,6 @@
 {
   "name": "xianyu-local",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "小丸闲鱼管家 - 多店铺客服工作台",
   "main": "src/main/index.js",

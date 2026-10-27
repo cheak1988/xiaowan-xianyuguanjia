@@ -159,6 +159,7 @@ function createProductService({ store, views, parent, onUpdated, scanTtlMs = 15 
     if (!Array.isArray(result.products) || result.products.length > 5000 || result.products.some((item) =>
       !/^\d{6,24}$/.test(String(item.item_id)) || !item.title || !['on_sale', 'sold'].includes(item.status)
       || !/^\d+(\.\d{1,2})?$/.test(String(item.price)))) throw new Error('商品数据无法校验，未改动已有商品');
+    if (!result.products.length && result.complete !== true) throw new Error('商品列表未完成读取，未改动已有商品；请检查店铺登录或网络后重试');
     const products = result.products.map((item) => ({ ...item, item_id: String(item.item_id), image: remoteImage(item.image) }));
     if (preview) {
       purgeScans();
