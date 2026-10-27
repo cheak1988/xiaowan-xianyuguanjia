@@ -1,0 +1,73 @@
+{
+  "name": "xianyu-local",
+  "version": "1.0.0",
+  "private": true,
+  "description": "小丸闲鱼管家 - 多店铺客服工作台",
+  "main": "src/main/index.js",
+  "scripts": {
+    "build:preload": "node scripts/build-preload.js",
+    "prestart": "npm run build:preload",
+    "predev": "npm run build:preload",
+    "prepack": "npm run build:preload",
+    "predist": "npm run build:preload",
+    "test": "node --test tests/*.test.js",
+    "start": "electron .",
+    "dev": "cross-env NODE_ENV=development electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^22.3.23",
+    "electron-builder": "^24.13.3",
+    "cross-env": "^7.0.3"
+  },
+  "build": {
+    "appId": "com.xiaowan.xianyuguanjia",
+    "productName": "OpenFish",
+    "asar": true,
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist-release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "THIRD-PARTY-NOTICES.md"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "小丸闲鱼管家"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.business"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": [
+        "AppImage"
+      ]
+    },
+    "artifactName": "xiaowan-xianyuguanjia-${version}-setup.${ext}"
+  },
+  "author": "xiaowan"
+}

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>使用前请阅读</title>
+<link rel="stylesheet" href="vendor/semi/tokens.css" />
+<link rel="stylesheet" href="ui.css" />
+<style>
+body { background: var(--card); font-size: 13.5px; line-height: 1.85; color: var(--ink); margin: 0; }
+#bar { height: 58px; display: flex; align-items: center; padding: 0 28px; -webkit-app-region: drag;
+  border-bottom: 1px solid var(--line); }
+#bar h1 { font-size: 16px; font-weight: 700; margin: 0; }
+#bar .ver { margin-left: auto; font-size: 11.5px; color: var(--ink-3); font-family: ui-monospace, Consolas, monospace; }
+#body { padding: 24px 28px 12px; height: calc(100vh - 58px - 92px); overflow-y: auto; }
+.lead { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; padding: 14px 16px; margin-bottom: 20px;
+  font-size: 13px; color: #78350f; line-height: 1.8; }
+.lead b { display: block; font-size: 14px; margin-bottom: 4px; color: #92400e; }
+h2 { font-size: 13.5px; font-weight: 700; margin: 22px 0 8px; color: var(--ink); }
+h2:first-of-type { margin-top: 0; }
+p { margin: 0 0 10px; color: var(--ink-2); }
+ul { margin: 0 0 10px; padding-left: 20px; color: var(--ink-2); }
+li { margin-bottom: 5px; }
+.strong { color: var(--danger); font-weight: 600; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--semi-color-fill-0);
+  padding: 1px 5px; border-radius: 3px; }
+#foot { height: 92px; padding: 16px 28px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px;
+  background: var(--card); }
+#agree-row { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; cursor: pointer; color: var(--ink); }
+#agree-row input { margin-top: 3px; width: 16px; height: 16px; flex-shrink: 0; }
+#buttons { display: flex; gap: 10px; justify-content: flex-end; }
+button { min-height: 34px; padding: 0 20px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink-2); font-size: 13px; cursor: pointer; font-family: inherit; }
+button:hover { border-color: var(--ink-3); color: var(--ink); }
+button.primary { background: var(--semi-color-primary); border-color: var(--semi-color-primary); color: #fff; font-weight: 600; }
+button.primary:disabled { opacity: .45; cursor: not-allowed; }
+button.primary:not(:disabled):hover { background: var(--semi-color-primary-hover, #1d4ed8); }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <h1>使用前请阅读</h1>
+    <span class="ver" id="ver"></span>
+  </div>
+  <div id="body">
+    <div class="lead">
+      <b>请先读完再点同意</b>
+      本软件会操作你闲鱼账号的官方网页。有些操作（自动擦亮、自动评价）可能被平台判定为异常，
+      <span class="strong">存在账号被限制功能甚至封禁的风险</span>。请务必先用小号测试。
+    </div>
+
+    <h2>一、软件性质</h2>
+    <p>小丸闲鱼管家是一款<strong>本地运行的第三方桌面工具</strong>，由开源项目与公开技术方案整合而成，用于协助卖家管理自己的闲鱼店铺。它不是闲鱼官方产品，
+      与闲鱼、淘宝、阿里巴巴集团及其关联公司<strong>没有任何隶属、合作或授权关系</strong>。</p>
+    <p>软件的界面名称、图标为个人开发者所有；闲鱼、淘宝等名称与商标归其各自权利人所有，本软件仅为说明用途提及。</p>
+
+    <h2>二、技术实现方式</h2>
+    <ul>
+      <li>软件通过内置浏览器加载<strong>闲鱼官方网页</strong>，登录由你在官方页面扫码完成，软件不代存你的账号密码。</li>
+      <li>消息读取、发送、发货等操作，是在官方页面上模拟用户操作实现的（DOM 交互），<strong>不破解、不调用平台的私有签名接口</strong>。</li>
+      <li>由于官方页面结构可能随时调整，部分依赖页面结构的自动化功能<strong>可能失效</strong>，需要等待更新。</li>
+    </ul>
+
+    <h2>三、风险与责任</h2>
+    <ul>
+      <li><strong>账号风险：</strong>使用任何在官方页面上模拟操作的工具，都可能触发平台风控。是否启用相关功能<span class="strong">完全由你自行决定</span>，
+        因使用本软件导致的账号限流、功能受限、封禁或资金损失，<span class="strong">由你自行承担</span>。</li>
+      <li><strong>交易风险：</strong>自动发货发出的卡密、自动回复的措辞、AI 生成的商品文案，均需你自行核对。因内容错误导致的交易纠纷由你承担。</li>
+      <li><strong>数据风险：</strong>所有数据保存在本机，软件不做云端备份。请自行备份数据目录；因硬盘损坏、误删、重装系统导致的数据丢失，本软件不承担责任。</li>
+      <li><strong>合规风险：</strong>请遵守《闲鱼社区公约》及相关法律法规。请勿用于批量营销、刷单、虚假交易、骚扰他人等违规用途。</li>
+    </ul>
+
+    <h2>四、我们不承诺的事</h2>
+    <ul>
+      <li>不承诺软件与官方页面的兼容性长期有效，不承诺任何功能永久可用。</li>
+      <li>不承诺 AI 生成的标题、详情能提升搜索排名或带来流量。</li>
+      <li>不承诺自动发货一定送达——发送结果以官方页面显示为准，结果不明时软件会停止并提示你人工核对。</li>
+      <li>不承诺软件无缺陷。使用前请自行评估并做好数据备份。</li>
+    </ul>
+
+    <h2>五、软件免费提供</h2>
+    <p>本软件<strong>免费提供，不收取任何费用</strong>，也没有会员等级或功能付费墙。免费不代表承担担保责任：软件按<span class="mono">现状（AS IS）</span>提供，
+      不附带任何明示或暗示的担保。</p>
+
+    <h2>六、开源组件</h2>
+    <p>本软件使用了若干开源组件（Electron、Semi Design 等），其许可证与版权声明随程序一起分发。
+      完整清单请见设置中的「开源声明」，或程序目录下的 <span class="mono">THIRD-PARTY-NOTICES.md</span>。</p>
+
+    <h2>七、协议接受</h2>
+    <p>点击下方「同意并继续」即表示：你已完整阅读并理解上述内容，<strong>自愿承担使用本软件的全部风险</strong>；
+      若不同意，请点击「退出程序」。</p>
+  </div>
+  <div id="foot">
+    <label id="agree-row"><input type="checkbox" id="agree" /> 我已阅读并理解上述全部内容，自愿承担使用风险</label>
+    <div id="buttons">
+      <button id="quit">退出程序</button>
+      <button id="ok" class="primary" disabled>同意并继续</button>
+    </div>
+  </div>
+  <script src="legal.js"></script>
+</body>
+</html>

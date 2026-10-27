@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>对话框</title>
+  <link rel="stylesheet" href="vendor/semi/tokens.css" />
+  <link rel="stylesheet" href="vendor/semi/icons.css" />
+  <link rel="stylesheet" href="ui.css" />
+  <link rel="stylesheet" href="dialog.css" />
+</head>
+<body class="dialog-page" theme-mode="light">
+  <div id="bar">
+    <span id="title">对话框</span>
+    <button id="close" title="关闭" aria-label="关闭"><span class="ui-icon icon-close" aria-hidden="true"></span></button>
+  </div>
+  <div id="body">
+    <div id="desc"></div>
+    <div id="fields"></div>
+  </div>
+  <div id="foot">
+    <button id="btn-cancel">取消</button>
+    <button id="btn-ok" class="primary">确定</button>
+  </div>
+
+  <script src="dlg.js"></script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+dist-*/
+!dist-release/xiaowan-xianyuguanjia-*.exe
+!dist-release/*.blockmap
+!dist-release/README-发布说明.txt
+
+# 验证产物与截图
+_bench/
+
+# 备份
+backups/
+
+# 日志与临时文件
+*.log
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 本地数据（绝不提交）
+state.json
+*.bak
+messages/
+userData/
+.env
+.env.*
+*.key
+*.pem

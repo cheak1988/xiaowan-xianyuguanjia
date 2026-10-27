@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>小丸闲鱼管家</title>
+  <link rel="stylesheet" href="vendor/semi/tokens.css" />
+  <link rel="stylesheet" href="vendor/semi/icons.css" />
+  <link rel="stylesheet" href="ui.css" />
+  <link rel="stylesheet" href="product-editor.css" />
+</head>
+<body class="theme-blue" data-view="chat" theme-mode="light">
+  <div id="titlebar">
+    <div class="breadcrumb"><span>工作空间</span><span class="ui-icon icon-chevron-right" aria-hidden="true"></span><span id="current-view-name">客服工作台</span></div>
+    <span class="spacer"></span>
+    <div class="titlebar-tools">
+      <select id="staff-select" title="当前操作客服" aria-label="当前操作客服"></select>
+      <span class="titlebar-divider"></span>
+      <div id="theme-switch" role="group" aria-label="界面主题">
+        <button data-theme="blue" title="Semi 浅色" aria-label="Semi 浅色"><span class="ui-icon icon-sun" aria-hidden="true"></span></button>
+        <button data-theme="amber" title="暖色" aria-label="暖色"><span class="ui-icon icon-palette" aria-hidden="true"></span></button>
+        <button data-theme="dark" title="Semi 深色" aria-label="Semi 深色"><span class="ui-icon icon-moon" aria-hidden="true"></span></button>
+      </div>
+      <span class="titlebar-divider"></span>
+      <button id="btn-wx" title="帮助与反馈"><span class="ui-icon icon-help" aria-hidden="true"></span>帮助与反馈</button>
+      <button id="btn-settings" class="icon-button" title="系统设置" aria-label="系统设置"><span class="ui-icon icon-settings" aria-hidden="true"></span></button>
+    </div>
+  </div>
+
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-brand">
+        <img id="app-logo" src="icon.png" alt="" />
+        <div><div class="brand">小丸闲鱼管家</div><div class="brand-sub">多店铺客服工作台</div></div>
+      </div>
+      <div class="section-caption">工作台</div>
+      <!-- 一级导航：标准 SaaS 侧栏 -->
+      <nav id="nav">
+        <button class="nav-item on" data-view="chat" title="客服会话">
+          <span class="nav-ico ui-icon icon-chat" aria-hidden="true"></span><span class="nav-txt">客服工作台</span>
+        </button>
+        <button class="nav-item" data-view="shops" title="店铺管理">
+          <span class="nav-ico ui-icon icon-shop" aria-hidden="true"></span><span class="nav-txt">店铺管理</span>
+        </button>
+        <button class="nav-item" data-view="products" title="商品管理">
+          <span class="nav-ico ui-icon icon-product" aria-hidden="true"></span><span class="nav-txt">商品管理</span>
+        </button>
+        <button class="nav-item" data-view="orders" title="订单管理">
+          <span class="nav-ico ui-icon icon-order" aria-hidden="true"></span><span class="nav-txt">订单管理</span>
+        </button>
+        <button class="nav-item" data-view="customers" title="客户管理">
+          <span class="nav-ico ui-icon icon-customer" aria-hidden="true"></span><span class="nav-txt">客户管理</span>
+        </button>
+        <button class="nav-item" data-view="tasks" title="自动任务">
+          <span class="nav-ico ui-icon icon-task" aria-hidden="true"></span><span class="nav-txt">自动任务</span>
+        </button>
+        <button class="nav-item" data-view="stats" title="数据看板">
+          <span class="nav-ico ui-icon icon-chart" aria-hidden="true"></span><span class="nav-txt">数据概览</span>
+        </button>
+        <button class="nav-item" data-view="settings" title="设置">
+          <span class="nav-ico ui-icon icon-settings" aria-hidden="true"></span><span class="nav-txt">系统设置</span>
+        </button>
+      </nav>
+
+      <!-- 账号列表：只在「客服」视图下显示 -->
+      <div id="acc-panel">
+        <header>
+          <span>我的店铺 <span id="shop-count"></span></span>
+          <button id="btn-add" title="添加店铺" aria-label="添加店铺"><span class="ui-icon icon-add" aria-hidden="true"></span></button>
+        </header>
+        <div id="accounts"></div>
+      </div>
+      <div class="sidebar-footer">
+        <span class="workspace-mark"><span class="ui-icon icon-shield" aria-hidden="true"></span></span>
+        <div><strong>本地工作空间</strong><div id="workspace-summary">尚未添加店铺</div></div>
+      </div>
+    </aside>
+
+    <div id="stage">
+      <!-- 客服视图：占位 + BrowserView 区域 -->
+      <div id="view-chat">
+        <div class="chat-toolbar">
+          <div class="chat-heading"><h1>客服工作台</h1><span id="active-shop-label">尚未选择店铺</span></div>
+          <button id="btn-panel"><span class="ui-icon icon-settings" aria-hidden="true"></span>辅助面板</button>
+        </div>
+        <div id="placeholder">
+          <div class="welcome">
+            <div class="welcome-icon"><span class="ui-icon icon-chat" aria-hidden="true"></span></div>
+            <div class="eyebrow">你的多店铺客服工作空间</div>
+            <h2>添加店铺，开始接待买家</h2>
+            <p>把不同店铺的日常接待放到一个窗口里。<br />每家店铺独立登录，自动回复与发货规则按需配置。</p>
+            <div class="welcome-actions">
+              <button id="btn-first-shop" class="primary"><span class="ui-icon icon-add" aria-hidden="true"></span>添加第一家店铺</button>
+              <button id="btn-first-settings">查看回复设置<span class="ui-icon icon-arrow-right" aria-hidden="true"></span></button>
+            </div>
+            <div class="welcome-steps">
+              <div class="welcome-step"><span class="step-number">1</span><div><b>添加店铺</b><span>填写便于识别的店铺名称</span></div></div>
+              <div class="welcome-step"><span class="step-number">2</span><div><b>扫码登录</b><span>使用闲鱼 App 完成登录</span></div></div>
+              <div class="welcome-step"><span class="step-number">3</span><div><b>配置接待</b><span>设置常用话术和回复规则</span></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 店铺管理视图 -->
+      <div id="view-shops" class="page-view">
+        <div class="page-head">
+          <div>
+            <h2>店铺管理</h2>
+            <div class="sub">管理多个闲鱼账号，分组归类、查看登录状态</div>
+          </div>
+          <div class="row">
+            <button id="btn-add-shop" class="primary"><span class="ui-icon icon-add" aria-hidden="true"></span>添加店铺</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="section-tabs" id="shop-status-tabs" role="group" aria-label="按店铺状态筛选">
+            <button class="section-tab on" data-shop-status="">全部店铺<span class="tab-count" data-shop-count="all">0</span></button>
+            <button class="section-tab" data-shop-status="online">在线<span class="tab-count" data-shop-count="online">0</span></button>
+            <button class="section-tab" data-shop-status="offline">待连接<span class="tab-count" data-shop-count="offline">0</span></button>
+            <button class="section-tab" data-shop-status="disabled">已停用<span class="tab-count" data-shop-count="disabled">0</span></button>
+          </div>
+          <div class="filter-bar">
+            <div class="filter-row">
+              <div class="filter-item">
+                <label>关键词</label>
+                <input id="sf-kw" placeholder="店铺名 / 闲鱼号 / 备注" />
+              </div>
+              <div class="filter-item">
+                <label>分组</label>
+                <select id="sf-group"><option value="">全部分组</option></select>
+              </div>
+              <div class="filter-item">
+                <label>状态</label>
+                <select id="sf-status">
+                  <option value="">全部</option>
+                  <option value="online">在线</option>
+                  <option value="offline">离线</option>
+                  <option value="disabled">已停用</option>
+                </select>
+              </div>
+            </div>
+            <div class="filter-actions">
+              <button class="primary" id="sf-search" style="font-size:12px">查询</button>
+              <button id="sf-reset" style="font-size:12px">重置</button>
+              <span class="spacer"></span>
+              <button class="filter-toggle" id="btn-manage-groups">管理分组</button>
+            </div>
+          </div>
+          <div id="shop-list"></div>
+        </div>
+      </div>
+
+      <!-- 客户管理视图 -->
+      <div id="view-customers" class="page-view">
+        <div class="page-head">
+          <div>
+            <h2>客户管理</h2>
+            <div class="sub">买家档案、标签、备注、黑名单</div>
+          </div>
+          <div class="row">
+            <button id="btn-sync-customers"><span class="ui-icon icon-refresh" aria-hidden="true"></span>从会话同步</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="filter-bar">
+            <div class="filter-row">
+              <div class="filter-item">
+                <label>关键词</label>
+                <input id="cf-kw" placeholder="昵称 / 买家ID / 备注" />
+              </div>
+              <div class="filter-item">
+                <label>标签</label>
+                <select id="cf-tag"><option value="">全部标签</option></select>
+              </div>
+              <div class="filter-item">
+                <label>类型</label>
+                <select id="cf-type">
+                  <option value="">全部</option>
+                  <option value="black">仅黑名单</option>
+                </select>
+              </div>
+            </div>
+            <div class="filter-actions">
+              <button class="primary" id="cf-search" style="font-size:12px">查询</button>
+              <button id="cf-reset" style="font-size:12px">重置</button>
+            </div>
+          </div>
+          <div id="customer-list"></div>
+        </div>
+      </div>
+
+      <!-- 商品管理视图 -->
+      <div id="view-products" class="page-view">
+        <div class="page-head">
+          <div>
+            <h2>商品管理</h2>
+            <div class="sub">管理店铺商品、图片、文案和发布草稿</div>
+          </div>
+          <div class="row">
+            <button id="btn-sync-products"><span class="ui-icon icon-refresh" aria-hidden="true"></span>同步商品</button>
+            <button id="btn-import-products"><span class="ui-icon icon-upload" aria-hidden="true"></span>批量导入</button>
+            <button id="btn-create-product" class="primary"><span class="ui-icon icon-add" aria-hidden="true"></span>发布商品</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="section-tabs" role="group" aria-label="商品管理内容">
+            <button class="section-tab on" data-product-mode="products">店铺商品</button>
+            <button class="section-tab" data-product-mode="drafts">发布草稿<span id="product-draft-count" class="tab-count">0</span></button>
+          </div>
+          <div id="product-sync-note" class="goods-sync-note" role="status">选择店铺后同步其在售与已售出商品；已下架商品请在官方后台查看。</div>
+          <div class="filter-bar">
+            <div class="filter-row">
+              <div class="filter-item">
+                <label>关键词</label>
+                <input id="pf-kw" placeholder="商品标题 / 商品ID" />
+              </div>
+              <div class="filter-item">
+                <label>状态</label>
+                <select id="pf-status">
+                  <option value="">全部</option>
+                  <option value="on_sale">在售</option>
+                  <option value="sold">已售出</option>
+                  <option value="off">已下架</option>
+                </select>
+              </div>
+              <div class="filter-item" id="pf-more">
+                <label>店铺</label>
+                <select id="pf-account"><option value="">全部店铺</option></select>
+              </div>
+            </div>
+            <div class="filter-actions">
+              <button class="primary" id="pf-search" style="font-size:12px">查询</button>
+              <button id="pf-reset" style="font-size:12px">重置</button>
+              <span class="spacer"></span>
+              <button class="filter-toggle" id="btn-open-product-page">打开店铺主页<span class="ui-icon icon-link" aria-hidden="true"></span></button>
+            </div>
+          </div>
+          <div id="product-list"></div>
+          <div id="product-draft-list" style="display:none"></div>
+        </div>
+      </div>
+
+      <!-- 订单管理视图 -->
+      <div id="view-orders" class="page-view">
+        <div class="page-head">
+          <div>
+            <h2>订单管理</h2>
+            <div class="sub">查看订单状态，执行发货或补发</div>
+          </div>
+          <button id="btn-sync-orders"><span class="ui-icon icon-refresh" aria-hidden="true"></span>同步订单</button>
+        </div>
+        <div class="page-body">
+          <div class="section-tabs" id="order-status-tabs" role="group" aria-label="按订单状态筛选">
+            <button class="section-tab on" data-order-status="">全部订单</button>
+            <button class="section-tab" data-order-status="待发货">待发货</button>
+            <button class="section-tab" data-order-status="uncertain">发送待核对</button>
+            <button class="section-tab" data-order-status="已发货">已发货</button>
+          </div>
+          <div class="filter-bar">
+            <div class="filter-row">
+              <div class="filter-item">
+                <label>订单号</label>
+                <input id="of-kw" placeholder="订单号 / 买家 / 商品" />
+              </div>
+              <div class="filter-item">
+                <label>状态</label>
+                <select id="of-status">
+                  <option value="">全部</option>
+                  <option value="待发货">待发货</option>
+                  <option value="uncertain">发送待核对</option>
+                  <option value="已发货">已发货</option>
+                </select>
+              </div>
+            </div>
+            <div class="filter-actions">
+              <button class="primary" id="of-search" style="font-size:12px">查询</button>
+              <button id="of-reset" style="font-size:12px">重置</button>
+            </div>
+          </div>
+          <div id="order-list"></div>
+        </div>
+      </div>
+
+      <!-- 自动任务视图 -->
+      <div id="view-tasks" class="page-view">
+        <div class="page-head">
+          <div>
+            <h2>自动任务</h2>
+            <div class="sub">定时擦亮、自动评价等</div>
+          </div>
+        </div>
+        <div class="page-body">
+          <div id="task-list"></div>
+        </div>
+      </div>
+
+      <!-- 数据看板视图 -->
+      <div id="view-stats" class="page-view">
+        <div class="page-head">
+          <div>
+            <h2>数据概览</h2>
+            <div class="sub">账号、订单、营收、库存概览</div>
+          </div>
+        </div>
+        <div class="page-body">
+          <div id="stats-grid" class="stats-grid"></div>
+
+          <div class="chart-row">
+            <div class="chart-card">
+              <div class="chart-head">
+                <span class="chart-title">近 7 天订单趋势</span>
+                <span class="muted" id="chart-trend-sub"></span>
+              </div>
+              <canvas id="chart-trend"></canvas>
+            </div>
+            <div class="chart-card">
+              <div class="chart-head">
+                <span class="chart-title">商品状态分布</span>
+              </div>
+              <canvas id="chart-product"></canvas>
+            </div>
+          </div>
+
+          <div class="chart-row">
+            <div class="chart-card">
+              <div class="chart-head">
+                <span class="chart-title">各店铺商品数量</span>
+              </div>
+              <canvas id="chart-shop"></canvas>
+            </div>
+            <div class="chart-card">
+              <div class="chart-head">
+                <span class="chart-title">订单状态分布</span>
+              </div>
+              <canvas id="chart-order"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 设置视图 -->
+      <div id="view-settings" class="page-view">
+        <div class="page-head">
+          <div>
+            <h2>系统设置</h2>
+            <div class="sub">自动回复、AI、通知、客服等全部配置</div>
+          </div>
+        </div>
+        <div class="settings-layout">
+          <aside class="settings-nav">
+            <div class="snav-item on" data-stab="rules">关键词回复</div>
+            <div class="snav-item" data-stab="quick">快捷话术</div>
+            <div class="snav-item" data-stab="ai">客服回复 AI</div>
+            <div class="snav-item" data-stab="product-ai">商品文案 AI</div>
+            <div class="snav-item" data-stab="relist">自动续售</div>
+            <div class="snav-item" data-stab="remote">远程协作</div>
+            <div class="snav-item" data-stab="delivery">自动发货</div>
+            <div class="snav-item" data-stab="actions">页面操作</div>
+            <div class="snav-item" data-stab="notify">通知告警</div>
+            <div class="snav-item" data-stab="staff">客服管理</div>
+            <div class="snav-sep"></div>
+            <div class="snav-item" data-stab="disclaimer">免责声明</div>
+            <div class="snav-item" data-stab="licenses">开源声明</div>
+          </aside>
+          <div class="settings-body">
+            <div id="stab-rules"></div>
+            <div id="stab-quick" style="display:none"></div>
+            <div id="stab-ai" style="display:none"></div>
+            <div id="stab-product-ai" style="display:none"></div>
+            <div id="stab-relist" style="display:none"></div>
+            <div id="stab-remote" style="display:none"></div>
+            <div id="stab-delivery" style="display:none"></div>
+            <div id="stab-actions" style="display:none"></div>
+            <div id="stab-notify" style="display:none"></div>
+            <div id="stab-staff" style="display:none"></div>
+            <div id="stab-disclaimer" style="display:none"></div>
+            <div id="stab-licenses" style="display:none"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="toasts"></div>
+      <div id="timeout-bar"></div>
+      <div id="dock">
+        <button id="btn-log">回复日志</button>
+      </div>
+    </div>
+
+    <aside id="panel">
+      <header>
+        <span class="ttl">接待辅助</span>
+        <button id="btn-close-panel" title="关闭辅助面板" aria-label="关闭辅助面板"><span class="ui-icon icon-close" aria-hidden="true"></span></button>
+      </header>
+      <div class="tabs">
+        <div data-tab="rules" class="on">关键词</div>
+        <div data-tab="ai">AI</div>
+        <div data-tab="delivery">发货</div>
+        <div data-tab="actions">操作</div>
+        <div data-tab="notify">通知</div>
+        <div data-tab="staff">客服</div>
+        <div data-tab="log">日志</div>
+      </div>
+      <div class="body">
+        <div id="tab-rules"></div>
+        <div id="tab-ai" style="display:none"></div>
+        <div id="tab-delivery" style="display:none"></div>
+        <div id="tab-actions" style="display:none"></div>
+        <div id="tab-notify" style="display:none"></div>
+        <div id="tab-staff" style="display:none"></div>
+        <div id="tab-log" style="display:none">
+          <div class="row" style="margin-bottom:8px">
+            <button id="btn-refresh-log">刷新</button>
+            <span class="muted" id="log-scope"></span>
+          </div>
+          <div id="log"></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="ui.js"></script>
+  <script src="chart.js"></script>
+  <script src="datatable.js"></script>
+  <script src="dialog.js"></script>
+  <script src="product-ai-settings.js"></script>
+  <script src="operations-settings.js"></script>
+  <script src="renderer.js"></script>
+  <script src="goods-options.js"></script>
+  <script src="product-editor.js"></script>
+</body>
+</html>
