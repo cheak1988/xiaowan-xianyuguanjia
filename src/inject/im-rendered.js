@@ -13,7 +13,19 @@ function readRenderedIM() {
     const info = value.sessionInfo, id = String(info.sessionId);
     if (value.activeCid) activeIds.add(String(value.activeCid));
     node.setAttribute('data-xy-session-id', id);
-    conversations.push({ id, nickname: node.querySelector('[class*="title--"]')?.textContent.trim() || '', last_text: String(info.summary?.summaryContent || '').slice(0, 500), last_ts: Number(info.summary?.timeStamp) || 0, item_id: String(info.itemInfo?.itemId || '') });
+    const summary = info.summary || {};
+    const badge = node.querySelector('[class*="unread"], [class*="badge"], [class*="red-point"]');
+    const unreadValue = info.unreadCount ?? info.unreadNum ?? info.unread ?? value.unreadCount;
+    const badgeText = badge?.textContent.trim() || '';
+    const unread = unreadValue == null
+      ? (badge ? Number.parseInt(badgeText, 10) || (badge.getClientRects().length ? 1 : 0) : 0)
+      : unreadValue === true ? 1 : Number.parseInt(unreadValue, 10) || 0;
+    const direction = typeof summary.isMyMsg === 'boolean' ? (summary.isMyMsg ? 'out' : 'in')
+      : ['in', 'out'].includes(summary.direction) ? summary.direction : '';
+    conversations.push({ id, nickname: node.querySelector('[class*="title--"]')?.textContent.trim() || '',
+      last_text: String(summary.summaryContent || '').slice(0, 500), last_ts: Number(summary.timeStamp) || 0,
+      item_id: String(info.itemInfo?.itemId || ''), unread: Math.max(0, unread), last_direction: direction,
+      last_message_id: String(summary.messageId || summary.msgId || ''), system: summary.type === 'system' });
   }
   const chat = document.querySelector('[class*="chat-main--"]');
   const value = props(chat, (value) => typeof value.store?.activeCid === 'string');

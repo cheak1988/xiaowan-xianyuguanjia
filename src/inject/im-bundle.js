@@ -14,7 +14,19 @@ function readRenderedIM() {
     const info = value.sessionInfo, id = String(info.sessionId);
     if (value.activeCid) activeIds.add(String(value.activeCid));
     node.setAttribute('data-xy-session-id', id);
-    conversations.push({ id, nickname: node.querySelector('[class*="title--"]')?.textContent.trim() || '', last_text: String(info.summary?.summaryContent || '').slice(0, 500), last_ts: Number(info.summary?.timeStamp) || 0, item_id: String(info.itemInfo?.itemId || '') });
+    const summary = info.summary || {};
+    const badge = node.querySelector('[class*="unread"], [class*="badge"], [class*="red-point"]');
+    const unreadValue = info.unreadCount ?? info.unreadNum ?? info.unread ?? value.unreadCount;
+    const badgeText = badge?.textContent.trim() || '';
+    const unread = unreadValue == null
+      ? (badge ? Number.parseInt(badgeText, 10) || (badge.getClientRects().length ? 1 : 0) : 0)
+      : unreadValue === true ? 1 : Number.parseInt(unreadValue, 10) || 0;
+    const direction = typeof summary.isMyMsg === 'boolean' ? (summary.isMyMsg ? 'out' : 'in')
+      : ['in', 'out'].includes(summary.direction) ? summary.direction : '';
+    conversations.push({ id, nickname: node.querySelector('[class*="title--"]')?.textContent.trim() || '',
+      last_text: String(summary.summaryContent || '').slice(0, 500), last_ts: Number(summary.timeStamp) || 0,
+      item_id: String(info.itemInfo?.itemId || ''), unread: Math.max(0, unread), last_direction: direction,
+      last_message_id: String(summary.messageId || summary.msgId || ''), system: summary.type === 'system' });
   }
   const chat = document.querySelector('[class*="chat-main--"]');
   const value = props(chat, (value) => typeof value.store?.activeCid === 'string');
@@ -530,6 +542,23 @@ ipcRenderer.on('inject:history', (_event, { requestId, sessionId }) => enqueueSe
     ipcRenderer.send('im:history-result', { requestId, sessionId, ok: true, messages });
   } catch (error) { ipcRenderer.send('im:history-result', { requestId, sessionId, ok: false, error: error.message }); }
   finally { if (switched && origin && String(readSessionId()) === String(sessionId)) await switchToSession(origin); switching = false; automationBusy = false; observedSid = null; }
+}));
+
+ipcRenderer.on('inject:focus-session', (_event, { sessionId }) => enqueueSend(async () => {
+  try {
+    if (!sessionId || String(sessionId).startsWith('nick:')) throw new Error('无法定位买家，请在店铺会话列表中选择。');
+    await refreshRenderedIM();
+    const input = pick(SEL.input)?.el;
+    if (String(readSessionId()) !== String(sessionId) && normalizeText(input?.value || input?.textContent)) {
+      throw new Error('当前会话有未发送草稿，已保留，请先处理草稿再切换买家。');
+    }
+    switching = true;
+    if (!await switchToSession(String(sessionId))) throw new Error('未找到对应会话，请检查店铺登录后在列表中选择买家。');
+    observedSid = readSessionId(); primeSeen();
+    ipcRenderer.send('im:focus-session-result', { ok: true });
+  } catch (error) {
+    ipcRenderer.send('im:focus-session-result', { ok: false, error: error.message });
+  } finally { switching = false; }
 }));
 
 // ------------------------- 启动 -------------------------

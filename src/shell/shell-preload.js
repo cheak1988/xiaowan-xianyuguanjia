@@ -40,6 +40,12 @@ contextBridge.exposeInMainWorld('api', {
     onDecision: (cb) => ipcRenderer.on('ui:reply-decision', (_e, p) => cb(p)),
     onSendResult: (cb) => ipcRenderer.on('ui:send-result', (_e, p) => cb(p)),
   },
+  messageAlerts: {
+    onSound: (cb) => ipcRenderer.on('ui:message-sound', (_e, p) => cb(p)),
+    onOpen: (cb) => ipcRenderer.on('ui:open-message', (_e, p) => cb(p)),
+    onError: (cb) => ipcRenderer.on('ui:message-alert-error', (_e, text) => cb(text)),
+    focus: (accountId, sessionId) => ipcRenderer.invoke('messages:focus', { accountId, sessionId }),
+  },
   rules: {
     list: (accountId) => ipcRenderer.invoke('rules:list', accountId),
     save: (rule) => ipcRenderer.invoke('rules:save', rule),

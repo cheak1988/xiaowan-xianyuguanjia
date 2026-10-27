@@ -71,6 +71,7 @@ function requireDisclaimer(store, parent) {
     // 用户从任务栏/系统强制关闭窗口时，视为未同意并退出，不留下半启动状态
     win.on('closed', () => { if (!settled) { settled = true; ipcMain.removeListener('legal:result', onResult); gate = null; resolve({ accepted: false, quit: true }); } });
     win.webContents.once('did-finish-load', () => {
+      if (settled || win.isDestroyed() || win.webContents.isDestroyed()) return;
       win.webContents.send('legal:init', { version: DISCLAIMER_VERSION, appVersion: app.getVersion() });
     });
   });

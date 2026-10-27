@@ -494,6 +494,23 @@ ipcRenderer.on('inject:history', (_event, { requestId, sessionId }) => enqueueSe
   finally { if (switched && origin && String(readSessionId()) === String(sessionId)) await switchToSession(origin); switching = false; automationBusy = false; observedSid = null; }
 }));
 
+ipcRenderer.on('inject:focus-session', (_event, { sessionId }) => enqueueSend(async () => {
+  try {
+    if (!sessionId || String(sessionId).startsWith('nick:')) throw new Error('无法定位买家，请在店铺会话列表中选择。');
+    await refreshRenderedIM();
+    const input = pick(SEL.input)?.el;
+    if (String(readSessionId()) !== String(sessionId) && normalizeText(input?.value || input?.textContent)) {
+      throw new Error('当前会话有未发送草稿，已保留，请先处理草稿再切换买家。');
+    }
+    switching = true;
+    if (!await switchToSession(String(sessionId))) throw new Error('未找到对应会话，请检查店铺登录后在列表中选择买家。');
+    observedSid = readSessionId(); primeSeen();
+    ipcRenderer.send('im:focus-session-result', { ok: true });
+  } catch (error) {
+    ipcRenderer.send('im:focus-session-result', { ok: false, error: error.message });
+  } finally { switching = false; }
+}));
+
 // ------------------------- 启动 -------------------------
 
 let observer = null;

@@ -2412,6 +2412,7 @@ let notifyChannels = [];
 let notifyLogList = [];
 
 async function loadNotify() {
+  settings = await window.api.settings.get();
   notifyChannels = await window.api.notify.channels();
   notifyLogList = await window.api.notify.log(50);
   renderNotify();
@@ -2421,10 +2422,44 @@ function renderNotify() {
   const box = $$('tab-notify');
   if (!box) return;
 
-  const settings = window.__settings || {};
-  const cfg = (settings.notify) || {};
+  const cfg = (settings || {}).notify || {};
 
   box.innerHTML = '';
+
+  const local = (settings || {}).messageAlerts || {};
+  const alerts = document.createElement('div');
+  alerts.className = 'card';
+  alerts.innerHTML = `<div style="font-size:14px;font-weight:600">新消息提醒</div>
+    <p class="muted" style="line-height:1.8;margin:8px 0 14px">客户发来新消息时立即提醒，覆盖后台店铺和最小化到托盘的情况。首次加载旧聊天不响铃，同一会话 3 秒内的连续消息合并提醒。电脑需保持运行、联网并登录店铺。</p>
+    <label class="switch"><input type="checkbox" id="msg-alert-enabled" ${local.enabled !== false ? 'checked' : ''}><span>启用新消息提醒</span></label>
+    <div class="row" style="margin-top:12px;gap:20px;flex-wrap:wrap">
+      <label class="switch"><input type="checkbox" id="msg-alert-sound" ${local.soundEnabled !== false ? 'checked' : ''}><span>播放提示音</span></label>
+      <label class="switch"><input type="checkbox" id="msg-alert-desktop" ${local.desktopEnabled !== false ? 'checked' : ''}><span>桌面通知</span></label>
+    </div>
+    <div class="field" style="margin-top:14px"><label for="msg-alert-volume">提示音音量</label>
+      <div class="row" style="gap:12px;flex-wrap:wrap"><input id="msg-alert-volume" type="range" min="0" max="100" value="${esc(Math.max(0, Math.min(100, Number(local.volume ?? 60) || 0)))}" style="width:180px;padding:0" aria-label="新消息提示音音量"><output id="msg-alert-level" for="msg-alert-volume"></output><button id="msg-alert-preview" type="button">试听提示音</button></div>
+    </div>
+    <div class="row" style="margin-top:12px;gap:10px"><button class="primary" id="msg-alert-save">保存提醒设置</button><span id="msg-alert-result" role="status" aria-live="polite" class="muted"></span></div>
+    <p class="muted" style="line-height:1.8;margin:10px 0 0">点击桌面通知可打开对应店铺与买家会话；有未发送草稿时会保留草稿并提示。桌面弹窗受 Windows 通知和勿扰设置影响，提示音受系统音量影响。超时未回复提醒仍在「关键词回复」中单独设置。</p>`;
+  box.appendChild(alerts);
+  const volume = alerts.querySelector('#msg-alert-volume');
+  const result = alerts.querySelector('#msg-alert-result');
+  volume.oninput = () => { alerts.querySelector('#msg-alert-level').textContent = volume.value + '%'; result.textContent = '修改后请保存'; };
+  volume.oninput(); result.textContent = '';
+  alerts.querySelector('#msg-alert-preview').onclick = async () => {
+    try { await window.MessageSound.play(volume.value); result.textContent = '正在试听；此音量需保存后生效'; }
+    catch (error) { result.textContent = error.message || '播放失败，请检查系统音量和音频设备'; }
+  };
+  alerts.querySelector('#msg-alert-save').onclick = async () => {
+    try {
+      settings = await window.api.settings.update({ messageAlerts: {
+        enabled: alerts.querySelector('#msg-alert-enabled').checked,
+        soundEnabled: alerts.querySelector('#msg-alert-sound').checked,
+        desktopEnabled: alerts.querySelector('#msg-alert-desktop').checked, volume: Number(volume.value),
+      } });
+      result.textContent = '已保存，所有店铺立即生效';
+    } catch (error) { result.textContent = '保存失败：' + error.message; }
+  };
 
   const intro = document.createElement('div');
   intro.className = 'card';
@@ -3057,6 +3092,22 @@ window.api.onSpaceTight(async ({ width }) => {
 
 window.api.reminder.onAlert(() => refreshTimeoutBar());
 window.api.reminder.onFocusSession(() => refreshTimeoutBar());
+
+let lastSoundError = 0;
+window.addEventListener('message-sound-error', () => {
+  if (Date.now() - lastSoundError < 60000) return;
+  lastSoundError = Date.now();
+  toast('新消息提示音未能播放，请在「系统设置 → 通知告警」中试听并检查音频设备。', 6000);
+});
+window.api.messageAlerts.onError((text) => toast(text, 6000));
+window.api.messageAlerts.onOpen(async ({ accountId, sessionId }) => {
+  try {
+    await switchView('chat');
+    await selectAccount(accountId);
+    const result = await window.api.messageAlerts.focus(accountId, sessionId);
+    if (!result.ok) toast(result.error, 6000);
+  } catch (error) { toast('打开消息失败：' + error.message, 6000); }
+});
 
 setInterval(refreshTimeoutBar, 60_000);
 

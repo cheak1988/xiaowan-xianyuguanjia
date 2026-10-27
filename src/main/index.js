@@ -22,6 +22,7 @@ const tasks = require('./tasks');
 const dialogWindow = require('./dialog-window');
 const legalWindow = require('./legal-window');
 const { secureRemoteView } = require('./remote-security');
+const { createMessageAlerts } = require('./message-alerts');
 const crypto = require('crypto');
 const { createDraftManager } = require('./product-drafts');
 const { createProductService } = require('./product-service');
@@ -45,6 +46,9 @@ const APP_ICON = path.join(__dirname, '..', 'shell', 'icon.png');
 // 注意：'OpenFish' 是数据目录名，改名会导致已有账号/卡密数据"丢失"（其实是找不到旧目录），
 // 所以这里保持 OpenFish，只改界面显示名叫「小丸闲鱼管家」。
 app.setName('OpenFish');
+if (process.platform === 'win32' && typeof app.setAppUserModelId === 'function') {
+  app.setAppUserModelId('com.xiaowan.xianyuguanjia');
+}
 if (!app.isPackaged) {
   app.setPath('userData', path.join(app.getPath('appData'), 'OpenFish'));
 }
@@ -56,6 +60,39 @@ let mountedAccountId = null;
 
 let win = null;
 let tray = null;
+const messageNotifications = new Set();
+const messageAlerts = createMessageAlerts({
+  getSettings: () => store.getSettings(),
+  playSound: (detail) => { if (win && !win.isDestroyed()) win.webContents.send('ui:message-sound', { volume: detail.volume }); },
+  flash: () => { if (win && !win.isDestroyed() && !win.isFocused?.()) win.flashFrame?.(true); },
+  showNotification: (detail) => {
+    if (!Notification?.isSupported()) return;
+    const notification = new Notification({
+      title: `新消息 · ${detail.accountLabel}`, body: `${detail.peerNick}：${detail.text}`,
+      icon: APP_ICON, silent: true, // The local WAV supplies one configurable sound, without double chimes.
+    });
+    messageNotifications.add(notification);
+    if (messageNotifications.size > 50) {
+      const oldest = messageNotifications.values().next().value;
+      oldest.close(); messageNotifications.delete(oldest);
+    }
+    notification.on('close', () => messageNotifications.delete(notification));
+    notification.on('failed', (_event, error) => {
+      messageNotifications.delete(notification);
+      console.error('[message-notification]', error);
+      if (win && !win.isDestroyed()) win.webContents.send('ui:message-alert-error', '桌面通知未能显示，请检查 Windows 通知设置。提示音不受此项影响。');
+    });
+    notification.on('click', () => {
+      const account = store.getAccount(detail.accountId);
+      if (!win || win.isDestroyed() || !account || account.disabled) return;
+      if (win.isMinimized?.()) win.restore();
+      win.show(); win.focus();
+      win.webContents.send('ui:open-message', { accountId: detail.accountId, sessionId: detail.sessionId });
+    });
+    notification.show();
+  },
+  onError: (error) => console.error('[message-alert]', error.message),
+});
 
 /* ------------------------------ 窗口 ------------------------------ */
 
@@ -76,6 +113,8 @@ function createWindow({ showWhenReady = true } = {}) {
       preload: path.join(__dirname, '..', 'shell', 'shell-preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
+      autoplayPolicy: 'no-user-gesture-required',
     },
   });
 
@@ -84,6 +123,7 @@ function createWindow({ showWhenReady = true } = {}) {
   win.on('resize', layoutView);
   win.on('maximize', layoutView);
   win.on('unmaximize', layoutView);
+  win.on('focus', () => win.flashFrame?.(false));
 
   win.on('close', (e) => {
     if (!app.isQuitting) {
@@ -125,6 +165,7 @@ function layoutView() {
 /* ------------------------------ 账号 ↔ view ------------------------------ */
 
 function createView(account) {
+  messageAlerts.resetAccount(account.id);
   const view = new BrowserView({
     webPreferences: {
       // 每个闲鱼号独立 session，否则会串号
@@ -273,6 +314,7 @@ ipcMain.on('im:history-result', (event, result) => {
 ipcMain.on('im:sessions', (event, rows) => {
   const accountId = accountIdOfWebContents(event.sender), account = accountId && store.getAccount(accountId);
   if (!account || account.disabled || event.senderFrame && event.senderFrame !== event.sender.mainFrame || !Array.isArray(rows) || rows.length > 5000) return;
+  messageAlerts.conversations(account, rows);
   for (const value of rows) {
     if (!value.id || String(value.id).length > 200 || String(value.id).startsWith('nick:')) continue;
     const row = store.ensureSession(accountId, String(value.id));
@@ -452,6 +494,7 @@ ipcMain.on('im:message', async (event, payload) => {
   const isHumanOut = message.direction === 'out' && !['ai', 'rule', 'delivery'].includes(message.source);
   try { if (store.saveMessage(accountId, session, message) === false) return; }
   catch (error) { console.error('[messages] 已停止处理，消息保存失败', error.message); return; }
+  messageAlerts.message(accountNow, session, message);
 
   // 自动建档：买家发来消息时更新客户档案
   if (session && (session.withWhoNick || session.peerUserId) && message.direction !== 'out') {
@@ -508,6 +551,23 @@ ipcMain.on('im:message', async (event, payload) => {
 });
 
 // 注入层回报发送结果
+handleShell('messages:focus', (_event, { accountId, sessionId } = {}) => {
+  const account = store.getAccount(accountId);
+  if (!account || account.disabled || !sessionId || String(sessionId).length > 200) return { ok: false, error: '店铺或会话不可用' };
+  const view = views.get(Number(accountId));
+  if (!view || !mount(accountId)) return { ok: false, error: '店铺聊天页未就绪' };
+  view.webContents.send('inject:focus-session', { sessionId: String(sessionId) });
+  return { ok: true };
+});
+
+ipcMain.on('im:focus-session-result', (event, result) => {
+  const accountId = accountIdOfWebContents(event.sender);
+  if (!accountId || event.senderFrame && event.senderFrame !== event.sender.mainFrame) return;
+  if (result?.ok === false && win && !win.isDestroyed()) {
+    win.webContents.send('ui:message-alert-error', String(result.error || '无法定位会话').slice(0, 250));
+  }
+});
+
 ipcMain.on('im:send-result', (event, result) => {
   const accountId = accountIdOfWebContents(event.sender);
   if (!accountId) return;

@@ -47,6 +47,7 @@ const EMPTY = {
 
 const DEFAULT_SETTINGS = {
   autoReply: { enabled: true },
+  messageAlerts: { enabled: true, soundEnabled: true, desktopEnabled: true, volume: 60 },
   reminder: {
     enabled: true,
     timeoutMinutes: 5,     // 买家最后一句超过多少分钟没回就提醒
