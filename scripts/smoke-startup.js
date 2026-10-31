@@ -44,4 +44,5 @@ app.on('web-contents-created', (_event, contents) => {
   });
 });
 require(process.argv.includes('--packed')
-  ? path.join(__dirname, '..', require('../package.json').build.directories.output, 'win-unpacked/resources/app.asar/src/main/index.js') : '../src/main/index.js');
+  ? path.resolve(__dirname, '..', process.argv.find((arg) => arg.startsWith('--packed-dir='))?.slice('--packed-dir='.length)
+    || require('../package.json').build.directories.output, 'win-unpacked/resources/app.asar/src/main/index.js') : '../src/main/index.js');

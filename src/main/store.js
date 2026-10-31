@@ -36,11 +36,22 @@ const EMPTY = {
   shopGroups: [],     // 店铺分组
   customers: [],      // 客户库（买家档案）
   quickReplies: [],   // 快捷回复话术（独立于 rules）
-  deliverRules: [],   // 自动发货配置
+  deliverRules: [],   // 自动发货配置（全局 / 账号 / 商品三级）
   deliverLog: [],     // 发货记录
   deliveries: [],     // 永久订单投递状态，不随展示日志轮换
   notifyLog: [],      // 通知发送记录
   staff: [],          // 多客服成员
+  cardGroups: [],     // 卡券分组
+  deliveryBlockRules: [], // 发货前风控规则
+  deliveryBlockLog: [],   // 风控命中记录
+  itemReplies: [],    // 商品专属回复
+  defaultReplies: [], // 默认回复（按账号）
+  replyLog: [],       // 回复决策日志
+  messageFilters: [], // 消息过滤规则
+  buyerInteraction: [], // 买家互动（按账号开关）
+  interactionLog: [], // 买家互动执行记录
+  interactionActions: [], // 永久动作状态；不随展示日志轮换
+  orderSyncLog: [],   // 订单同步记录
   meta: {},
   settings: null,
 };
@@ -68,7 +79,25 @@ const DEFAULT_SETTINGS = {
     rate:   { enabled: false, delayMinutes: 10, riskAccepted: false },
     catchupScan: { enabled: false, intervalMinutes: 30, riskAccepted: true },
     tokenRenew: { enabled: true, checkMinutes: 30 },
+    orderSync: { enabled: false, intervalMinutes: 10 },  // 订单页常驻扫描
   },
+  /** 买家互动：全部默认关闭，必须逐账号显式开启 */
+  buyerInteraction: {
+    thanks: { enabled: false, template: '感谢您的购买，收到货后有问题随时找我，祝您使用愉快~' },
+    flower: { enabled: false, template: '如果这次交易还满意，方便的话送我一朵小红花呀，谢谢支持~' },
+    rate: { enabled: false, template: '东西不错，发货很快，好评~', score: 5 },
+    receiveFlower: { enabled: false },
+    delayMinutes: 1,
+  },
+  /** 发货前风控（默认关闭，命中后拦截发货） */
+  deliveryRisk: {
+    buyerBlacklist: { enabled: true },
+    buyerHasOpenOrder: { enabled: false, sameItemOnly: false },
+    buyerHasOpenOrderGlobal: { enabled: false, sameItemOnly: false },
+    buyerLowCredit: { enabled: false, threshold: 0 },
+  },
+  /** 订单同步 */
+  orderSync: { autoOpenPage: false, pageIntervalSeconds: 30 },
   productAI: {
     baseURL: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiKeyEnc: '', systemPrompt: '',
   },
@@ -104,15 +133,21 @@ const DEFAULT_SETTINGS = {
 let file = null;
 let state = null;
 let saveTimer = null;
+let writesSuspended = false;
 
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
-function init(userDataPath) {
-  file = path.join(userDataPath, STATE_FILE);
-  state = readJson(file, () => clone(EMPTY), (value) => value && !Array.isArray(value)
-    && typeof value === 'object' && Array.isArray(value.accounts)
+function validState(value) {
+  return value && !Array.isArray(value) && typeof value === 'object' && Array.isArray(value.accounts)
     && Object.keys(EMPTY).every((key) => !Array.isArray(EMPTY[key])
-      || value[key] == null || Array.isArray(value[key])));
+      || value[key] == null || Array.isArray(value[key]));
+}
+
+function init(userDataPath) {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  writesSuspended = false;
+  file = path.join(userDataPath, STATE_FILE);
+  state = readJson(file, () => clone(EMPTY), validState);
   for (const k of Object.keys(EMPTY)) {
     if (state[k] === undefined || state[k] === null) state[k] = clone(EMPTY[k]);
   }
@@ -184,6 +219,21 @@ function init(userDataPath) {
       entry.reason = '上次运行中断，请人工核对，暂停自动重发';
     }
   }
+  // 兼容旧互动日志；未知结果也不能自动重试不可撤销的动作。
+  for (const log of state.interactionLog) {
+    if (!['thanks', 'flower', 'rate', 'receiveFlower'].includes(log.action)) continue;
+    if (!state.interactionActions.some((entry) => entry.account_id === log.account_id
+      && entry.order_no === String(log.order_no) && entry.action === log.action)) {
+      state.interactionActions.push({ account_id: log.account_id, order_no: String(log.order_no),
+        action: log.action, status: log.ok ? 'done' : 'uncertain', updated_at: log.ts });
+    }
+  }
+  for (const entry of state.interactionActions) {
+    if (entry.status === 'running') {
+      entry.status = 'uncertain';
+      entry.reason = '上次运行中断，请先人工核对，未自动重试';
+    }
+  }
   persist();
   return state;
 }
@@ -194,6 +244,7 @@ function ready() {
 }
 
 function scheduleSave() {
+  if (writesSuspended) return;
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = null;
@@ -290,13 +341,21 @@ function setCurrentStaffId(id) {
 }
 
 function persist() {
-  if (file && state) writeJson(file, state);
+  if (!writesSuspended && file && state) writeJson(file, state);
 }
 
 function flush() {
+  if (writesSuspended) return;
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   msgStore.flushAll();
   persist();
+}
+
+/** 恢复备份后等待重启，旧异步任务和退出钩子都不得覆盖恢复的数据。 */
+function suspendWrites() {
+  writesSuspended = true;
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  msgStore.suspendWrites();
 }
 
 /* ------------------------------ account ------------------------------ */
@@ -449,6 +508,45 @@ function findSession(accountId, sessionId) {
     (x) => x.account_id === Number(accountId) && x.id === String(sessionId),
   );
 }
+
+/**
+ * 会话列表的展示补充：昵称 / 头像缺失时，从聊天记录里回填。
+ *
+ * 为什么需要：早期版本的会话同步只写 peer_nick，而页面昵称提取依赖 DOM 类名，
+ * 类名一改就全是空串，列表只能显示一串会话 ID。消息记录里其实存了 sender_nick，
+ * 用它回填可以让历史数据也正常显示。
+ *
+ * @param {Array} sessions  会话行
+ * @param {number} [limit]  最多回填多少个（避免一次读太多分片）
+ */
+function hydrateSessionNicks(sessions, limit = 200) {
+  const out = [];
+  let filled = 0;
+  for (const row of sessions) {
+    if (row.peer_nick || filled >= limit) { out.push(row); continue; }
+    let nick = '';
+    try {
+      // 只读最近 20 条，找第一条「买家发来」且有昵称的消息
+      const messages = msgStore.query(Number(row.account_id), String(row.id), 20);
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.direction !== 'in') continue;
+        const candidate = String(m.sender_nick || '').trim();
+        if (candidate) { nick = candidate; break; }
+      }
+    } catch (_) { /* 消息分片读失败不影响列表 */ }
+    if (nick) {
+      // 回写到会话上，下次直接命中；只在内存里改，调用方决定何时 persist
+      row.peer_nick = nick;
+      filled += 1;
+    }
+    out.push(row);
+  }
+  if (filled) scheduleSave();
+  return out;
+}
+
+/* ------------------------------ rule ------------------------------ */
 
 function markHumamActivity(accountId, sessionId, ts) {
   const row = ensureSession(accountId, sessionId);
@@ -990,11 +1088,341 @@ function upsertOrder(accountId, order) {
     status: order.status || row.status || '',
     updated_at: now,
   });
+  // 订单页同步出来的补充字段：只在有值时覆盖，避免扫描丢字段
+  for (const key of ['buy_num', 'spec_name', 'spec_value', 'receiver_name', 'receiver_phone',
+    'receiver_address', 'note', 'source', 'created_text', 'refund_amount', 'post_fee', 'buyer_credit']) {
+    if (order[key] !== undefined && order[key] !== null && order[key] !== '') row[key] = order[key];
+  }
+  if (order.created_at && !row.created_ts_from_platform) {
+    const parsed = Date.parse(String(order.created_at).replace(/\//g, '-'));
+    if (Number.isFinite(parsed)) row.created_ts_from_platform = parsed;
+  }
   scheduleSave();
   return row;
 }
 
-/* ---- 商品/订单汇总（数据看板用） ---- */
+/** 身份只从订单或已人工关联的本店会话补全，不以昵称猜测。 */
+function resolveOrderBuyer(accountId, order) {
+  const session = order.session_id && findSession(accountId, order.session_id);
+  const peerUid = session && session.peer_user_id;
+  return { ...order, buyer_uid: order.buyer_uid || peerUid || null,
+    buyer_identity_conflict: !!(order.buyer_uid && peerUid && String(order.buyer_uid) !== String(peerUid)) };
+}
+
+/** 更新单个订单的附加信息（备注、手动状态） */
+function updateOrderField(accountId, orderNo, patch) {
+  const s = ready();
+  const row = (s.orders || []).find((o) => o.account_id === Number(accountId)
+    && o.order_no === String(orderNo));
+  if (!row) return null;
+  for (const key of ['note', 'status', 'session_id', 'item_title']) {
+    if (patch[key] !== undefined) row[key] = patch[key];
+  }
+  row.updated_at = Date.now();
+  scheduleSave();
+  return row;
+}
+
+function removeOrder(accountId, orderNo) {
+  const s = ready();
+  const before = (s.orders || []).length;
+  s.orders = (s.orders || []).filter((o) => !(o.account_id === Number(accountId)
+    && o.order_no === String(orderNo)));
+  if (s.orders.length !== before) scheduleSave();
+  return before !== s.orders.length;
+}
+
+function pushOrderSyncLog(entry) {
+  const s = ready();
+  if (!s.orderSyncLog) s.orderSyncLog = [];
+  s.orderSyncLog.push({ ts: Date.now(), ...entry });
+  if (s.orderSyncLog.length > 300) s.orderSyncLog = s.orderSyncLog.slice(-300);
+  scheduleSave();
+}
+
+function listOrderSyncLog(limit) {
+  return (ready().orderSyncLog || []).slice(-(limit || 50)).reverse();
+}
+
+/* ------------------------------ 卡券分组 ------------------------------ */
+
+function listCardGroups(accountId) {
+  return (ready().cardGroups || [])
+    .filter((g) => !accountId || g.account_id === Number(accountId))
+    .sort((a, b) => (a.sort || 0) - (b.sort || 0) || a.id - b.id);
+}
+
+function saveCardGroup(group) {
+  const s = ready();
+  if (!s.cardGroups) s.cardGroups = [];
+  const name = String(group.name || '').trim();
+  if (!name) throw new Error('分组名称不能为空');
+  if (group.id) {
+    const row = s.cardGroups.find((g) => g.id === Number(group.id));
+    if (!row) throw new Error('分组不存在');
+    row.name = name;
+    if (group.note !== undefined) row.note = String(group.note || '');
+    scheduleSave();
+    return row;
+  }
+  const row = {
+    id: s.cardGroups.reduce((m, g) => Math.max(m, g.id), 0) + 1,
+    account_id: Number(group.accountId) || null,
+    name,
+    note: String(group.note || ''),
+    sort: s.cardGroups.length,
+    created_at: Date.now(),
+  };
+  s.cardGroups.push(row);
+  scheduleSave();
+  return row;
+}
+
+function removeCardGroup(id) {
+  const s = ready();
+  const gid = Number(id);
+  s.cardGroups = (s.cardGroups || []).filter((g) => g.id !== gid);
+  // 卡密与发货规则上的分组引用一并清掉，避免出现悬空分组
+  for (const card of s.cards || []) if (card.group_id === gid) card.group_id = null;
+  for (const rule of s.deliverRules || []) if (rule.group_id === gid) rule.group_id = null;
+  scheduleSave();
+}
+
+/* ------------------------------ 发货前风控规则 ------------------------------ */
+
+/**
+ * 风控规则（用户可配置的开关集合，规则本体在 auto-delivery 里评估）：
+ *   buyerBlacklist       买家在当前店铺的客户档案被拉黑
+ *   buyerHasOpenOrder    买家在当前店铺还有未完成的订单
+ *   buyerHasOpenOrderGlobal 买家在本机任一店铺还有未完成的订单
+ *   buyerLowCredit       买家评价数不高于阈值（需要在订单页抓到）
+ */
+
+function getDeliveryRiskSettings() {
+  return mergeSettings(clone(DEFAULT_SETTINGS.deliveryRisk), ready().settings.deliveryRisk || {});
+}
+
+function saveDeliveryRiskSettings(patch) {
+  const s = ready();
+  s.settings.deliveryRisk = mergeSettings(s.settings.deliveryRisk || clone(DEFAULT_SETTINGS.deliveryRisk), patch || {});
+  scheduleSave();
+  return s.settings.deliveryRisk;
+}
+
+function listDeliveryBlockLog(accountId, limit) {
+  return (ready().deliveryBlockLog || [])
+    .filter((row) => !accountId || row.account_id === Number(accountId))
+    .slice(-(limit || 100)).reverse();
+}
+
+function pushDeliveryBlockLog(entry) {
+  const s = ready();
+  if (!s.deliveryBlockLog) s.deliveryBlockLog = [];
+  s.deliveryBlockLog.push({ ts: Date.now(), ...entry });
+  if (s.deliveryBlockLog.length > 800) s.deliveryBlockLog = s.deliveryBlockLog.slice(-800);
+  scheduleSave();
+}
+
+/* ------------------------------ 默认回复 / 商品回复 ------------------------------ */
+
+/**
+ * 默认回复：关键词和 AI 都没命中时的那一句，每个账号独立。
+ * replyOnce=true 时，同一个会话只回一次默认回复。
+ */
+function getDefaultReply(accountId) {
+  const row = (ready().defaultReplies || []).find((x) => x.account_id === Number(accountId));
+  return row || { account_id: Number(accountId), enabled: false, content: '', reply_once: true, apply_to_items: [] };
+}
+
+function saveDefaultReply(accountId, patch) {
+  const s = ready();
+  if (!s.defaultReplies) s.defaultReplies = [];
+  let row = s.defaultReplies.find((x) => x.account_id === Number(accountId));
+  if (!row) {
+    row = { account_id: Number(accountId), enabled: false, content: '', reply_once: true, apply_to_items: [] };
+    s.defaultReplies.push(row);
+  }
+  if (patch.enabled !== undefined) row.enabled = !!patch.enabled;
+  if (patch.content !== undefined) row.content = String(patch.content || '');
+  if (patch.reply_once !== undefined) row.reply_once = !!patch.reply_once;
+  if (patch.apply_to_items !== undefined) {
+    row.apply_to_items = Array.isArray(patch.apply_to_items)
+      ? patch.apply_to_items.map(String).filter(Boolean) : [];
+  }
+  row.updated_at = Date.now();
+  scheduleSave();
+  return row;
+}
+
+/** 默认回复是否已经对这个会话发过 */
+function hasDefaultReplyRecord(accountId, sessionId) {
+  const s = ready();
+  const row = s.sessions.find((x) => x.account_id === Number(accountId) && x.id === String(sessionId));
+  return !!(row && row.default_reply_at);
+}
+
+function markDefaultReply(accountId, sessionId) {
+  const row = ensureSession(accountId, sessionId);
+  row.default_reply_at = Date.now();
+  scheduleSave();
+}
+
+function listItemReplies(accountId) {
+  return (ready().itemReplies || [])
+    .filter((x) => x.account_id === Number(accountId))
+    .sort((a, b) => a.id - b.id);
+}
+
+function getItemReply(accountId, itemId) {
+  return (ready().itemReplies || []).find((x) => x.account_id === Number(accountId)
+    && String(x.item_id) === String(itemId)) || null;
+}
+
+function saveItemReply(reply) {
+  const s = ready();
+  if (!s.itemReplies) s.itemReplies = [];
+  const itemId = String(reply.item_id || '').trim();
+  const content = String(reply.content || '').trim();
+  if (!itemId) throw new Error('请填写商品ID');
+  if (!content) throw new Error('请填写回复内容');
+  let row = s.itemReplies.find((x) => x.account_id === Number(reply.accountId)
+    && x.item_id === itemId);
+  if (!row) {
+    row = {
+      id: s.itemReplies.reduce((m, x) => Math.max(m, x.id), 0) + 1,
+      account_id: Number(reply.accountId),
+      item_id: itemId,
+      item_title: String(reply.item_title || ''),
+      content,
+      enabled: reply.enabled === false ? false : true,
+      created_at: Date.now(),
+    };
+    s.itemReplies.push(row);
+  } else {
+    row.content = content;
+    if (reply.item_title !== undefined) row.item_title = String(reply.item_title || '');
+    if (reply.enabled !== undefined) row.enabled = !!reply.enabled;
+    row.updated_at = Date.now();
+  }
+  scheduleSave();
+  return row;
+}
+
+function removeItemReply(id) {
+  const s = ready();
+  s.itemReplies = (s.itemReplies || []).filter((x) => x.id !== Number(id));
+  scheduleSave();
+}
+
+/* ------------------------------ 消息过滤 ------------------------------ */
+
+/**
+ * 过滤规则：匹配到就不回（客户发来的消息里最常见的是「自动回复」「机器人」）。
+ * type: 'ignore'（整条消息忽略，不记录决策以外的动作）
+ */
+function listMessageFilters(accountId) {
+  return (ready().messageFilters || [])
+    .filter((x) => x.account_id === Number(accountId))
+    .sort((a, b) => a.id - b.id);
+}
+
+function saveMessageFilter(filter) {
+  const s = ready();
+  if (!s.messageFilters) s.messageFilters = [];
+  const keyword = String(filter.keyword || '').trim();
+  if (!keyword) throw new Error('请填写过滤词');
+  let row = s.messageFilters.find((x) => x.account_id === Number(filter.accountId)
+    && x.keyword === keyword);
+  if (!row) {
+    row = {
+      id: s.messageFilters.reduce((m, x) => Math.max(m, x.id), 0) + 1,
+      account_id: Number(filter.accountId),
+      keyword,
+      filter_type: filter.filter_type === 'exact' ? 'exact' : 'contains',
+      note: String(filter.note || ''),
+      created_at: Date.now(),
+    };
+    s.messageFilters.push(row);
+  } else {
+    row.filter_type = filter.filter_type === 'exact' ? 'exact' : 'contains';
+    if (filter.note !== undefined) row.note = String(filter.note || '');
+  }
+  scheduleSave();
+  return row;
+}
+
+function removeMessageFilter(id) {
+  const s = ready();
+  s.messageFilters = (s.messageFilters || []).filter((x) => x.id !== Number(id));
+  scheduleSave();
+}
+
+/* ------------------------------ 回复决策日志 ------------------------------ */
+
+function pushReplyLog(entry) {
+  const s = ready();
+  if (!s.replyLog) s.replyLog = [];
+  s.replyLog.push({ ts: Date.now(), ...entry });
+  // 决策日志是最容易堆积的：只留最近 1000 条，避免 state.json 无限膨胀
+  if (s.replyLog.length > 1000) s.replyLog = s.replyLog.slice(-1000);
+  scheduleSave();
+}
+
+function listReplyLog(accountId, limit) {
+  return (ready().replyLog || [])
+    .filter((row) => !accountId || row.account_id === Number(accountId))
+    .slice(-(limit || 100)).reverse();
+}
+
+/* ------------------------------ 买家互动 ------------------------------ */
+
+/**
+ * 每个账号一组开关，默认全关。
+ *   thanks       买家确认收货后发致谢
+ *   flower       交易成功后求小红花
+ *   rate         自动评价（高风险，评价不可撤销）
+ *   receiveFlower 自动收下买家送的小红花
+ */
+function getBuyerInteraction(accountId) {
+  const row = (ready().buyerInteraction || []).find((x) => x.account_id === Number(accountId));
+  return mergeSettings(clone(DEFAULT_SETTINGS.buyerInteraction), row || {});
+}
+
+function saveBuyerInteraction(accountId, patch) {
+  const s = ready();
+  if (!s.buyerInteraction) s.buyerInteraction = [];
+  let row = s.buyerInteraction.find((x) => x.account_id === Number(accountId));
+  if (!row) {
+    row = { account_id: Number(accountId) };
+    s.buyerInteraction.push(row);
+  }
+  for (const key of ['thanks', 'flower', 'rate', 'receiveFlower']) {
+    if (patch[key] && typeof patch[key] === 'object') {
+      row[key] = { ...(row[key] || DEFAULT_SETTINGS.buyerInteraction[key]), ...patch[key] };
+    }
+  }
+  if (patch.delayMinutes !== undefined) {
+    row.delayMinutes = Math.max(0, Math.min(1440, Number(patch.delayMinutes) || 0));
+  }
+  row.updated_at = Date.now();
+  scheduleSave();
+  return getBuyerInteraction(accountId);
+}
+
+function listInteractionLog(accountId, limit) {
+  return (ready().interactionLog || [])
+    .filter((row) => !accountId || row.account_id === Number(accountId))
+    .slice(-(limit || 100)).reverse();
+}
+
+function pushInteractionLog(entry) {
+  const s = ready();
+  if (!s.interactionLog) s.interactionLog = [];
+  s.interactionLog.push({ ts: Date.now(), ...entry });
+  if (s.interactionLog.length > 800) s.interactionLog = s.interactionLog.slice(-800);
+  scheduleSave();
+}
+
 function getStats(accountId) {
   const s = ready();
   const acc = accountId ? Number(accountId) : null;
@@ -1004,9 +1432,12 @@ function getStats(accountId) {
 
   const onSale = products.filter((p) => p.status === 'on_sale').length;
   const pending = orders.filter((o) => /待发货/.test(o.status || '')).length;
-  const revenue = orders
-    .filter((o) => !/关|退/.test(o.status || ''))
+  const isClosed = (o) => /关|退|取消/.test(o.status || '');
+  const revenue = orders.filter((o) => !isClosed(o))
     .reduce((sum, o) => sum + (Number(o.amount) || 0), 0);
+  const refunded = orders.filter((o) => /退款/.test(o.status || ''))
+    .reduce((sum, o) => sum + (Number(o.refund_amount) || Number(o.amount) || 0), 0);
+  const shipped = orders.filter((o) => /已发货|已收货|交易成功|已完成/.test(o.status || ''));
 
   return {
     accounts: (s.accounts || []).length,
@@ -1014,17 +1445,20 @@ function getStats(accountId) {
     onSale,
     orders: orders.length,
     pendingShip: pending,
+    shipped: shipped.length,
     sessions: sessions.length,
     revenue: Math.round(revenue * 100) / 100,
+    refunded: Math.round(refunded * 100) / 100,
     cardsUnused: (s.cards || []).filter((c) => !acc || c.account_id === acc)
       .filter((c) => c.status === 'unused').length,
   };
 }
 
 module.exports = {
-  init, flush, persist, ready, DEFAULT_SETTINGS, scheduleSave, automationVersion,
+  init, flush, persist, ready, DEFAULT_SETTINGS, scheduleSave, automationVersion, validState, suspendWrites,
   listAccounts, getAccount, addAccount, updateAccount, removeAccount, setActiveAccount, getActiveAccount,
   saveMessage, listMessages, listRecentMessages, findSession, ensureSession, markHumamActivity, markAiActivity,
+  hydrateSessionNicks,
   listRules, saveRule, removeRule, exportRulesCsv, importRulesCsv,
   getSettings, updateSettings, setSafeStorage, setAiKey, getAiKey, setProductAiKey, getProductAiKey,
   pushAiLog, listAiLog,
@@ -1035,7 +1469,16 @@ module.exports = {
   listShopGroups, saveShopGroup, removeShopGroup,
   listCustomers, upsertCustomer, updateCustomer, removeCustomer, listCustomerTags,
   listQuickReplies, saveQuickReply, removeQuickReply,
-  listOrders, upsertOrder, getStats,
+  listOrders, upsertOrder, resolveOrderBuyer, updateOrderField, removeOrder, getStats,
+  pushOrderSyncLog, listOrderSyncLog,
+  listCardGroups, saveCardGroup, removeCardGroup,
+  getDeliveryRiskSettings, saveDeliveryRiskSettings,
+  listDeliveryBlockLog, pushDeliveryBlockLog,
+  getDefaultReply, saveDefaultReply, hasDefaultReplyRecord, markDefaultReply,
+  listItemReplies, getItemReply, saveItemReply, removeItemReply,
+  listMessageFilters, saveMessageFilter, removeMessageFilter,
+  pushReplyLog, listReplyLog,
+  getBuyerInteraction, saveBuyerInteraction, listInteractionLog, pushInteractionLog,
   listStaff, addStaff, updateStaff, removeStaff, assignSession, isSessionOwnedByOther,
   getCurrentStaffId, setCurrentStaffId,
 };

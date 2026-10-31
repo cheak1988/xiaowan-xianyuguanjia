@@ -12,7 +12,7 @@ function shop(t, imports) {
   f.delivery = f.load('src/main/auto-delivery.js');
   f.delivery.saveDeliverRule({ accountId: f.account.id, item_id: 'ITEM', template: '{卡密}' });
   f.delivery.importCards({ accountId: f.account.id, itemId: 'ITEM', text: 'CARD-A\nCARD-B' });
-  f.order = (number = 'ORDER-1') => ({ order_no: number, item_id: 'ITEM', session_id: 'BUYER-' + number });
+  f.order = (number = 'ORDER-1') => ({ order_no: number, item_id: 'ITEM', session_id: 'BUYER-' + number, buyer_uid: 'UID-' + number });
   f.send = (order, sendFn = async () => ({ ok: true })) => f.delivery.handleOrder({ accountId: f.account.id, order, sendFn });
   return f;
 }

@@ -112,7 +112,33 @@ function decide({ accountId, account, session, message, settings }) {
     return { action: 'skip', reason: '重复内容', replies: [] };
   }
 
-  // 1) 规则
+  // 买家黑名单：在本店被拉黑的客户，不自动回复也不自动发货
+  const customer = buyerOf(accountId, session);
+  if (customer && customer.blacklisted) {
+    return { action: 'skip', reason: `买家「${customer.nick || customer.buyer_uid}」在黑名单中`, replies: [] };
+  }
+
+  // 消息过滤：命中过滤词直接忽略（买家自己发的「自动回复」之类）
+  for (const filter of store.listMessageFilters(accountId)) {
+    const matched = filter.filter_type === 'exact' ? text === filter.keyword : text.includes(filter.keyword);
+    if (matched) {
+      return { action: 'skip', reason: `命中消息过滤「${filter.keyword}」`, replies: [] };
+    }
+  }
+
+  // 1) 商品专属回复：命中的商品优先，比关键词更具体
+  if (session && session.itemId) {
+    const itemReply = store.getItemReply(accountId, session.itemId);
+    if (itemReply && itemReply.enabled && itemReply.content) {
+      return {
+        action: 'reply',
+        reason: `商品专属回复（${session.itemId}）`,
+        replies: [{ kind: 'item', content: itemReply.content, images: [] }],
+      };
+    }
+  }
+
+  // 2) 规则
   const ruleHits = rules.match(accountId, message, session);
   // 只保留有实际内容的回复（避免发出空白消息）
   const usable = ruleHits.filter((r) => {
@@ -133,7 +159,7 @@ function decide({ accountId, account, session, message, settings }) {
     };
   }
 
-  // 2) AI
+  // 3) AI
   if (s.ai.enabled) {
     return {
       action: 'ai',
@@ -144,7 +170,33 @@ function decide({ accountId, account, session, message, settings }) {
     };
   }
 
+  // 4) 默认回复：规则和 AI 都没接住时兜底
+  const fallback = store.getDefaultReply(accountId);
+  if (fallback.enabled && fallback.content) {
+    const scopeItems = (fallback.apply_to_items || []).map(String);
+    const inScope = !scopeItems.length || (session && scopeItems.includes(String(session.itemId || '')));
+    if (inScope) {
+      if (fallback.reply_once && store.hasDefaultReplyRecord(accountId, sid)) {
+        return { action: 'skip', reason: '默认回复已发过（仅回复一次）', replies: [] };
+      }
+      return {
+        action: 'reply',
+        reason: '规则未命中，使用默认回复',
+        replies: [{ kind: 'default', content: fallback.content, images: [] }],
+        markDefault: true,
+      };
+    }
+  }
+
   return { action: 'skip', reason: '规则未命中且 AI 未启用', replies: [] };
+}
+
+/** 从会话里找到对应的客户档案 */
+function buyerOf(accountId, session) {
+  const uid = session && (session.peerUserId || session.peer_user_id);
+  if (!uid) return null;
+  return (store.ready().customers || []).find((row) =>
+    row.account_id === Number(accountId) && String(row.buyer_uid) === String(uid)) || null;
 }
 
 /**
@@ -201,7 +253,9 @@ async function handleOnce({ accountId, account, session, message, sendFn }) {
   };
 
   if (decision.action === 'reply') {
-    return sendReplies(decision.replies, decision.reason);
+    const result = await sendReplies(decision.replies, decision.reason);
+    if (result.action === 'reply' && decision.markDefault) store.markDefaultReply(accountId, sid);
+    return result;
   }
 
   // AI 路径：先过议价控制

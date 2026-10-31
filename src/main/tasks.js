@@ -24,10 +24,13 @@
 const store = require('./store');
 
 const RISK_LEVELS = {
-  catchupScan: { level: 'none', name: '待发货兜底扫描', requireAccept: false },
-  tokenRenew: { level: 'none', name: '凭证续期检测', requireAccept: false },
-  polish: { level: 'high', name: '每日自动擦亮', requireAccept: true },
-  rate: { level: 'high', name: '自动评价买家', requireAccept: true },
+  // page：任务必须在哪个页面执行。
+  // 之前所有任务都发给 IM 页面，导致「擦亮」找不到商品列表、「评价」找不到订单，
+  // 每次都报「找不到按钮」——这不是选择器问题，是页面根本错了。
+  catchupScan: { level: 'none', name: '待发货兜底扫描', requireAccept: false, page: null },
+  tokenRenew: { level: 'none', name: '凭证续期检测', requireAccept: false, page: null },
+  polish: { level: 'high', name: '每日自动擦亮', requireAccept: true, page: 'product' },
+  rate: { level: 'high', name: '自动评价买家', requireAccept: true, page: 'order' },
 };
 
 const timers = new Map();       // taskId -> timer
@@ -179,6 +182,7 @@ function listTasks() {
       name: meta.name,
       risk: meta.level,
       requireAccept: meta.requireAccept,
+      page: meta.page,
       enabled: !!cfg.enabled,
       riskAccepted: !!cfg.riskAccepted,
       config: cfg,

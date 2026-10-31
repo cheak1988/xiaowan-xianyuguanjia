@@ -30,8 +30,10 @@ const MAX_FILE_MESSAGES = 8000; // 单月超过这个数，多开一个分片文
 let rootDir = null;              // <userData>/messages
 const cache = new Map();         // 文件路径 -> { list, dirty, timer }
 let indexCache = null;           // accountId -> Set<"YYYY-MM">
+let writesSuspended = false;
 
 function init(userDataPath) {
+  writesSuspended = false;
   for (const entry of cache.values()) if (entry.timer) clearTimeout(entry.timer);
   cache.clear();
   rootDir = path.join(userDataPath, 'messages');
@@ -95,6 +97,7 @@ function scheduleSave(filePath) {
 }
 
 function flushFile(filePath) {
+  if (writesSuspended) return;
   const entry = cache.get(filePath);
   if (!entry || !entry.dirty) return;
   writeJson(filePath, entry.list);
@@ -111,6 +114,7 @@ function flushAll() {
  * @param {object} record { session_id, message_id, ts, direction, text, ... }
  */
 function append(accountId, record) {
+  if (writesSuspended) return false;
   if (!rootDir) return;
   const month = monthKey(record.ts);
 
@@ -175,6 +179,7 @@ function count(accountId) {
 
 /** 删除某账号全部分片 */
 function removeAccount(accountId) {
+  if (writesSuspended) return;
   const dir = path.join(rootDir, String(accountId));
   for (const [filePath, entry] of cache) {
     if (path.dirname(filePath) !== dir) continue;
@@ -257,7 +262,14 @@ function stats(accountId) {
   });
 }
 
+function suspendWrites() {
+  writesSuspended = true;
+  for (const entry of cache.values()) { if (entry.timer) clearTimeout(entry.timer); }
+  cache.clear();
+  indexCache = null;
+}
+
 module.exports = {
-  init, append, query, count, removeAccount,
+  init, suspendWrites, append, query, count, removeAccount,
   migrateFromLegacy, flushAll, stats, listShards, monthKey,
 };

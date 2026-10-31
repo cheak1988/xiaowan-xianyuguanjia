@@ -18,11 +18,12 @@
 const { ipcRenderer } = require('electron');
 
 const SEL = {
-  // 商品列表里的「擦亮」按钮
+  // 商品列表里的「擦亮」按钮（商品管理页）
   polishBtn: [
-    '[class*="polish"]',
-    '[class*="refresh"]',
+    'button[class*="polish"]',
+    '[class*="polish-btn"]',
     'button[class*="shine"]',
+    'button[title*="擦亮"]',
     '[title*="擦亮"]',
     '[aria-label*="擦亮"]',
   ],
@@ -30,10 +31,11 @@ const SEL = {
   productCard: [
     '[class*="item-card"]',
     '[class*="goods-card"]',
+    '[class*="product-card"]',
     '[data-item-id]',
     'a[href*="item?id="]',
   ],
-  // 评价相关
+  // 评价相关（订单页；本页只做兜底，正常走 order-preload 的 order:rate）
   rateBtn: [
     '[class*="rate"]',
     '[class*="comment"]',
@@ -146,7 +148,8 @@ async function runPolishBatch() {
   const maxPerRun = 20; // 单次最多擦 20 个，防止一次点太多触发风控
 
   for (const card of cards.list.slice(0, maxPerRun)) {
-    const btn = pick(SEL.polishBtn);
+    // 按钮要在「这张卡片内部」找，不能全页取第一个，否则每次都会点到同一个商品
+    const btn = pickIn(card, SEL.polishBtn);
     if (!btn || !visible(btn.el)) continue;
     btn.el.click();
     count++;
@@ -162,55 +165,33 @@ async function runPolishBatch() {
   };
 }
 
+/** 在给定根节点内查找元素 */
+function pickIn(root, selectors) {
+  const list = Array.isArray(selectors) ? selectors : [selectors];
+  for (const s of list) {
+    try {
+      const el = root.querySelector(s);
+      if (el) return { el, selector: s };
+    } catch (_) { /* ignore */ }
+  }
+  return null;
+}
+
 /* ------------------------------ 自动评价 ------------------------------ */
 
+/**
+ * 评价在订单页执行。本脚本主要通过 order-preload 的 order:rate 通道，
+ * 这个函数是给「任务在 IM 页面被误触发」时兜底用的：直接告诉调用方去订单页。
+ */
 async function runRate({ text } = {}) {
   if (!canRate()) {
     return { ok: false, reason: '评价频率限制：每分钟最多 3 条' };
   }
-
-  const btn = pick(SEL.rateBtn);
-  if (!btn || !visible(btn.el)) {
-    return {
-      ok: false,
-      reason: '找不到「评价」按钮。请在订单页打开待评价订单。',
-      needManual: true,
-    };
-  }
-  btn.el.click();
-  await sleep(1000);
-
-  // 填评价内容
-  const tpl = String(text || '东西不错，发货很快，好评~');
-  const ta = pick(SEL.rateTextarea);
-  if (ta && visible(ta.el)) {
-    if (ta.el.tagName === 'TEXTAREA') {
-      ta.el.value = tpl;
-      ta.el.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      ta.el.textContent = tpl;
-      ta.el.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    }
-    await sleep(500);
-  }
-
-  // 提交
-  const submit = pick(SEL.rateSubmit);
-  if (!submit || !visible(submit.el)) {
-    return { ok: false, reason: '找不到提交按钮', needManual: true };
-  }
-  submit.el.click();
-  lastRun.rate.push(Date.now());
-  await sleep(1200);
-
-  // 二次确认
-  const confirm = pick(['[class*="confirm"] button[class*="primary"]', 'button[class*="sure"]']);
-  if (confirm && visible(confirm.el)) {
-    confirm.el.click();
-    await sleep(600);
-  }
-
-  return { ok: true, reason: '已提交评价' };
+  return {
+    ok: false,
+    needPage: 'order',
+    reason: '评价需要在订单页执行，请在「自动任务」里对订单页运行，或使用订单管理的「评价」按钮',
+  };
 }
 
 /* ------------------------------ IPC ------------------------------ */

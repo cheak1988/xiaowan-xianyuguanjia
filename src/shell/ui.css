@@ -197,7 +197,10 @@ body.mac #titlebar { padding-left: 84px; padding-right: 20px; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 28px 28px 24px; flex-shrink: 0; }
 .page-head h2 { font-size: 23px; font-weight: 600; line-height: 1.4; margin: 0; letter-spacing: -.35px; }
 .page-head .sub { font-size: 12px; color: var(--ink-3); margin-top: 7px; }
-.page-body { flex: 1; overflow: auto; padding: 0 28px 28px; min-height: 0; }
+.page-body { flex: 1; overflow: auto; padding: 0 28px 28px; min-height: 0; scrollbar-gutter: stable; }
+.page-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.page-body::-webkit-scrollbar-thumb { background: var(--semi-color-fill-2); border-radius: 4px; }
+.page-body::-webkit-scrollbar-track { background: transparent; }
 .section-tabs { display: flex; align-items: center; gap: 28px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
 .section-tab { position: relative; height: 40px; padding: 0 0 12px; border-radius: 0; color: var(--ink-3); background: transparent; font-size: 13px; gap: 7px; }
 .section-tab:hover { background: transparent; color: var(--ink); }
@@ -217,7 +220,11 @@ body.mac #titlebar { padding-left: 84px; padding-right: 20px; }
 .filter-toggle { background: transparent; color: var(--semi-color-primary); }
 .filter-more { display: none; }
 .filter-more.show { display: flex; }
-.tbl-wrap { position: relative; border: 1px solid var(--line); border-radius: 8px; background: var(--card); overflow: hidden; }
+/* 列多时在表格内部横向滚动，而不是把页面撑宽、让内容压到页面滚动条下面 */
+.tbl-wrap { position: relative; border: 1px solid var(--line); border-radius: 8px; background: var(--card); overflow-x: auto; overflow-y: hidden; }
+.tbl-wrap::-webkit-scrollbar { height: 8px; }
+.tbl-wrap::-webkit-scrollbar-thumb { background: var(--semi-color-fill-2); border-radius: 4px; }
+.tbl-wrap::-webkit-scrollbar-track { background: transparent; }
 .tbl-toolbar { padding: 18px 20px; min-height: 64px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); gap: 12px; }
 .tbl-toolbar .left, .tbl-toolbar .right { display: flex; align-items: center; gap: 10px; }
 .tbl-title { font-size: 14px; font-weight: 600; }
@@ -306,12 +313,18 @@ table.dt tbody tr.selected { background: var(--y-50); }
 .log-item:last-child { border-bottom: 0; }
 .log-ok { color: var(--ok); } .log-fail { color: var(--danger); }
 .settings-layout { flex: 1; display: flex; min-height: 0; overflow: hidden; margin: 0 28px 28px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
-.settings-nav { width: 174px; flex-shrink: 0; border-right: 1px solid var(--line); padding: 16px 12px; overflow: auto; }
+.settings-nav { width: 174px; flex-shrink: 0; border-right: 1px solid var(--line); padding: 16px 12px; overflow-y: auto; scrollbar-gutter: stable; }
+.settings-nav::-webkit-scrollbar { width: 6px; }
+.settings-nav::-webkit-scrollbar-thumb { background: var(--semi-color-fill-2); border-radius: 3px; }
+.settings-nav::-webkit-scrollbar-track { background: transparent; }
 .snav-item { padding: 10px 12px; border-radius: 5px; font-size: 13px; color: var(--ink-3); margin-bottom: 4px; cursor: pointer; }
 .snav-item:hover { background: var(--semi-color-fill-0); color: var(--ink); }
 .snav-item.on { color: var(--semi-color-primary); background: var(--y-50); font-weight: 500; }
 .snav-sep { height: 1px; background: var(--line); margin: 10px 8px; }
-.settings-body { flex: 1; min-width: 0; overflow-y: auto; padding: 24px; }
+.settings-body { flex: 1; min-width: 0; overflow-y: auto; padding: 24px; scrollbar-gutter: stable; }
+.settings-body::-webkit-scrollbar { width: 8px; }
+.settings-body::-webkit-scrollbar-thumb { background: var(--semi-color-fill-2); border-radius: 4px; }
+.settings-body::-webkit-scrollbar-track { background: transparent; }
 .settings-body > div { max-width: 940px; }
 .settings-body .card { padding: 20px; }
 .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 16px; }
@@ -339,8 +352,8 @@ table.dt tbody tr.selected { background: var(--y-50); }
 .sk-row { height: 42px; border-radius: 4px; margin-bottom: 10px; background: var(--semi-color-fill-0); animation: skeletonPulse 1.5s ease infinite; }
 @keyframes skeletonPulse { 50% { opacity: .4; } }
 
-/* Toasts and alerts stay above the embedded page's native bounds in the chat toolbar. */
-#toasts { position: absolute; right: 20px; top: 12px; z-index: 90; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+/* 提示条固定在右下角：页面顶部是标题与「同步/导出」等按钮，放上面会盖住它们。 */
+#toasts { position: absolute; right: 20px; bottom: 20px; z-index: 90; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
 .toast { padding: 10px 16px; max-width: 430px; font-size: 12px; line-height: 20px; background: var(--semi-color-bg-3); color: var(--ink-2); border: 1px solid var(--line); border-radius: 6px; box-shadow: var(--shadow-lg); animation: fadeIn .15s ease; }
 body[data-view="chat"] .toast:not(:last-child) { display: none; }
 #dock { position: absolute; top: 16px; right: 172px; pointer-events: none; }

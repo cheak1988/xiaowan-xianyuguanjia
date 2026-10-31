@@ -355,6 +355,59 @@ async function submit(payload, requestId) {
   return { ok: true, clicked: true };
 }
 const activeRequests = new Set(), completedRequests = new Map();
+
+/* ------------------------------ 擦亮 ------------------------------ */
+
+/**
+ * 擦亮商品（我的闲鱼 → 商品管理页的「擦亮」按钮）
+ *
+ * 单次最多擦 20 个，每个之间 2-4 秒随机间隔；找不到按钮就明确报告，
+ * 不要静默返回成功——擦亮失败会直接影响曝光。
+ */
+async function polishItems({ limit = 20, itemId = '' } = {}) {
+  const cards = Array.from(document.querySelectorAll(
+    '[class*="item-card"],[class*="goods-card"],[class*="product-card"],[data-item-id]',
+  ));
+  const targets = itemId
+    ? cards.filter((card) => String(card.getAttribute('data-item-id') || '') === String(itemId)
+      || String(card.textContent || '').includes(String(itemId)))
+    : cards;
+
+  const polishBtnSelectors = [
+    'button[class*="polish"]', '[class*="polish-btn"]', 'button[class*="shine"]',
+    'button[title*="擦亮"]', '[title*="擦亮"]', '[aria-label*="擦亮"]',
+  ];
+  const findBtn = (root) => {
+    for (const selector of polishBtnSelectors) {
+      const el = root.querySelector(selector);
+      if (el && visible(el)) return el;
+    }
+    // 有些页面用「文字按钮」而不是精确类名
+    return Array.from(root.querySelectorAll('button,span[role="button"],a'))
+      .find((el) => visible(el) && /^擦亮$/.test(text(el))) || null;
+  };
+
+  if (!targets.length) {
+    // 页面可能用「我的闲鱼」商品列表，兜底找全页擦亮按钮
+    const globalBtn = findBtn(document);
+    if (!globalBtn) return { ok: false, error: '找不到商品列表或「擦亮」按钮，请确认已打开商品管理页并登录', needManual: true };
+    globalBtn.click();
+    await pause(1200);
+    return { ok: true, count: 1, reason: '已点击擦亮' };
+  }
+
+  let count = 0;
+  for (const card of targets.slice(0, limit)) {
+    const btn = findBtn(card);
+    if (!btn) continue;
+    btn.click();
+    count++;
+    await pause(2000 + Math.random() * 2000);
+  }
+  if (!count) return { ok: false, error: '找到了商品，但没有可点的「擦亮」按钮（可能今天已擦过）', needManual: true };
+  return { ok: true, count, reason: `已擦亮 ${count} 个商品` };
+}
+
 ipcRenderer.on('product:command', async (_event, { requestId, action, payload = {} }) => {
   if (activeRequests.has(requestId)) return;
   if (completedRequests.has(requestId)) { ipcRenderer.send('product:response', completedRequests.get(requestId)); return; }
@@ -367,6 +420,7 @@ ipcRenderer.on('product:command', async (_event, { requestId, action, payload = 
     else if (action === 'apply-options') { await waitForForm(); await platformOptions('apply', payload); result = readForm(); }
     else if (action === 'clear-images') result = await clearImages();
     else if (action === 'wait-image') result = await waitImage(payload);
+    else if (action === 'polish') result = await polishItems(payload);
     else if (action === 'submit') result = await submit(payload, requestId);
     else result = { ok: false, error: '未知商品操作' };
   } catch (error) { result = { ok: false, error: error.message }; }

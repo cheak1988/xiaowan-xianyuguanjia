@@ -3,6 +3,7 @@ title 小丸闲鱼管家 - 启动器
 
 cd /d "%~dp0"
 
+set "REPAIR_EXE=dist-repair-1.2.1\win-unpacked\OpenFish.exe"
 set "PROXY_EXE=dist-ai-proxy\win-unpacked\OpenFish.exe"
 set "OPERATIONS_EXE=dist-operations\win-unpacked\OpenFish.exe"
 set "SETTINGS_EXE=dist-ai-settings\win-unpacked\OpenFish.exe"
@@ -19,6 +20,11 @@ echo   ==========================================
 echo              小丸闲鱼管家
 echo   ==========================================
 echo.
+
+if exist "%REPAIR_EXE%" (
+    start "" "%REPAIR_EXE%"
+    exit /b 0
+)
 
 if exist "%PROXY_EXE%" (
     start "" "%PROXY_EXE%"

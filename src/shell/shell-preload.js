@@ -131,14 +131,51 @@ contextBridge.exposeInMainWorld('api', {
     saveRule: (rule) => ipcRenderer.invoke('delivery:save-rule', rule),
     removeRule: (id) => ipcRenderer.invoke('delivery:remove-rule', id),
     cards: (accountId, itemId) => ipcRenderer.invoke('delivery:cards', { accountId, itemId }),
+    removeCard: (id) => ipcRenderer.invoke('delivery:remove-card', id),
     cardStats: (accountId) => ipcRenderer.invoke('delivery:card-stats', { accountId }),
-    importCards: (accountId, itemId, text) =>
-      ipcRenderer.invoke('delivery:import-cards', { accountId, itemId, text }),
+    importCards: (accountId, itemId, text, groupId) =>
+      ipcRenderer.invoke('delivery:import-cards', { accountId, itemId, text, groupId }),
     importImageCards: (accountId, itemId) => ipcRenderer.invoke('delivery:import-image-cards', { accountId, itemId }),
     clearCards: (accountId, itemId) => ipcRenderer.invoke('delivery:clear-cards', { accountId, itemId }),
     log: (accountId, limit) => ipcRenderer.invoke('delivery:log', { accountId, limit }),
     preview: (accountId, itemId) => ipcRenderer.invoke('delivery:preview', { accountId, itemId }),
+    riskSettings: () => ipcRenderer.invoke('delivery:risk-settings'),
+    saveRisk: (patch) => ipcRenderer.invoke('delivery:risk-save', patch),
+    blockLog: (accountId, limit) => ipcRenderer.invoke('delivery:block-log', { accountId, limit }),
+    evaluateRisk: (accountId, orderNo) => ipcRenderer.invoke('delivery:evaluate-risk', { accountId, orderNo }),
     onResult: (cb) => ipcRenderer.on('ui:delivery-result', (_e, p) => cb(p)),
+  },
+  cardGroups: {
+    list: (accountId) => ipcRenderer.invoke('card-groups:list', accountId),
+    save: (group) => ipcRenderer.invoke('card-groups:save', group),
+    remove: (id) => ipcRenderer.invoke('card-groups:remove', id),
+  },
+  interaction: {
+    get: (accountId) => ipcRenderer.invoke('interaction:get', accountId),
+    save: (accountId, patch) => ipcRenderer.invoke('interaction:save', { accountId, patch }),
+    log: (accountId, limit) => ipcRenderer.invoke('orders:interaction-log', { accountId, limit }),
+  },
+  defaultReply: {
+    get: (accountId) => ipcRenderer.invoke('default-reply:get', accountId),
+    save: (accountId, patch) => ipcRenderer.invoke('default-reply:save', { accountId, patch }),
+  },
+  itemReplies: {
+    list: (accountId) => ipcRenderer.invoke('item-replies:list', accountId),
+    save: (reply) => ipcRenderer.invoke('item-replies:save', reply),
+    remove: (id) => ipcRenderer.invoke('item-replies:remove', id),
+  },
+  messageFilters: {
+    list: (accountId) => ipcRenderer.invoke('message-filters:list', accountId),
+    save: (filter) => ipcRenderer.invoke('message-filters:save', filter),
+    remove: (id) => ipcRenderer.invoke('message-filters:remove', id),
+  },
+  replyLog: {
+    list: (accountId, limit) => ipcRenderer.invoke('reply-log:list', { accountId, limit }),
+  },
+  backup: {
+    export: () => ipcRenderer.invoke('backup:export'),
+    import: () => ipcRenderer.invoke('backup:import'),
+    list: () => ipcRenderer.invoke('backup:list'),
   },
   shopGroups: {
     list: () => ipcRenderer.invoke('shopgroups:list'),
@@ -162,6 +199,14 @@ contextBridge.exposeInMainWorld('api', {
     list: (accountId) => ipcRenderer.invoke('orders:list', accountId),
     operate: (accountId, orderNo, action, payload) =>
       ipcRenderer.invoke('order:operate', { accountId, orderNo, action, payload }),
+    sync: (accountId) => ipcRenderer.invoke('orders:sync', accountId),
+    syncLog: (limit) => ipcRenderer.invoke('orders:sync-log', limit),
+    update: (accountId, orderNo, patch) =>
+      ipcRenderer.invoke('orders:update', { accountId, orderNo, patch }),
+    remove: (accountId, orderNo) => ipcRenderer.invoke('orders:remove', { accountId, orderNo }),
+    exportCsv: (csv) => ipcRenderer.invoke('orders:export-csv', csv),
+    interact: (accountId, orderNo) => ipcRenderer.invoke('orders:interact', { accountId, orderNo }),
+    onUpdated: (cb) => ipcRenderer.on('ui:orders-updated', (_e, p) => cb(p)),
   },
   tasks: {
     list: () => ipcRenderer.invoke('tasks:list'),
@@ -171,6 +216,7 @@ contextBridge.exposeInMainWorld('api', {
     runNow: (taskId, accountId) => ipcRenderer.invoke('tasks:run-now', { taskId, accountId }),
     log: (limit) => ipcRenderer.invoke('tasks:log', limit),
     tokenStatus: () => ipcRenderer.invoke('tasks:token-status'),
+    orderScanStatus: () => ipcRenderer.invoke('tasks:order-scan-status'),
   },
   notify: {
     channels: () => ipcRenderer.invoke('notify:channels'),
@@ -192,6 +238,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   sessions: {
     list: (accountId) => ipcRenderer.invoke('sessions:list', accountId),
+    listAll: (accountId) => ipcRenderer.invoke('sessions:list-all', accountId),
     assign: (accountId, sessionId, assigneeId) =>
       ipcRenderer.invoke('sessions:assign', { accountId, sessionId, assigneeId }),
     onUpdated: (cb) => ipcRenderer.on('sessions:updated', (_e, p) => cb(p)),

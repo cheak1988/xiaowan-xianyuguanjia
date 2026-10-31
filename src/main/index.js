@@ -28,7 +28,11 @@ const { createDraftManager } = require('./product-drafts');
 const { createProductService } = require('./product-service');
 const productAI = require('./product-ai');
 const uploadChatImage = require('./im-media').createImageUploader();
+const orderSync = require('./order-sync');
+const buyerInteraction = require('./buyer-interaction');
 let productDrafts;
+let restoringBackup = false;
+let restoreNeedsRestart = false;
 
 const OFFICIAL_IM_URL = 'https://www.goofish.com/im';
 const TITLEBAR_HEIGHT = 48;
@@ -254,9 +258,17 @@ function destroyView(accountId) {
   views.delete(Number(accountId));
 }
 
-function stopAccountViews(accountId) {
+function stopAccountViews(accountId, { preserveInteractions = false } = {}) {
   accountId = Number(accountId);
+  lastLoginState.delete(accountId);
   delivery.cancelAccount(accountId);
+  if (!preserveInteractions) buyerInteraction.cancelAccount(accountId);
+  orderSync.cancelPending(accountId);
+  for (const [requestId, pending] of orderActions) {
+    if (pending.accountId === accountId) {
+      pending.finish({ ok: false, uncertain: true, error: '店铺页面已停止，请核对操作结果' });
+    }
+  }
   for (const [requestId, pending] of pendingSends) {
     if (pending.accountId === accountId) {
       clearTimeout(pending.timer);
@@ -279,6 +291,7 @@ function handleShell(channel, handler) {
         || (event.senderFrame && event.senderFrame !== win.webContents.mainFrame)) {
       throw new Error('未授权的 IPC 调用');
     }
+    if (restoringBackup || restoreNeedsRestart) throw new Error('备份恢复期间已暂停操作，请退出并重启软件');
     return handler(event, ...args);
   });
 }
@@ -491,7 +504,7 @@ ipcMain.on('im:message', async (event, payload) => {
 
   const accountNow = store.getAccount(accountId);
   if (!accountNow || accountNow.disabled) return;
-  const isHumanOut = message.direction === 'out' && !['ai', 'rule', 'delivery'].includes(message.source);
+  const isHumanOut = message.direction === 'out' && !['ai', 'rule', 'delivery', 'interaction'].includes(message.source);
   try { if (store.saveMessage(accountId, session, message) === false) return; }
   catch (error) { console.error('[messages] 已停止处理，消息保存失败', error.message); return; }
   messageAlerts.message(accountNow, session, message);
@@ -529,6 +542,17 @@ ipcMain.on('im:message', async (event, payload) => {
       sendFn: (reply, guard) => sendToSession(accountId, String((session && session.id) || ''), reply, guard),
     });
 
+    // 决策日志落库：用户问「为什么没回」时要能查
+    store.pushReplyLog({
+      account_id: accountId,
+      session_id: String((session && session.id) || ''),
+      buyer_nick: (session && (session.withWhoNick || session.peer_nick)) || '',
+      message: String((message && (message.content && message.content.text || message.content)) || '').slice(0, 200),
+      action: result.action,
+      reason: result.reason || '',
+      replies: Array.isArray(result.replies) ? result.replies.length : 0,
+    });
+
     if (win) {
       win.webContents.send('ui:reply-decision', {
         accountId,
@@ -538,6 +562,12 @@ ipcMain.on('im:message', async (event, payload) => {
     }
   } catch (e) {
     console.error('[reply-engine] failed', e);
+    store.pushReplyLog({
+      account_id: accountId,
+      session_id: String((session && session.id) || ''),
+      action: 'error',
+      reason: String(e && e.message || e),
+    });
     if (win) {
       win.webContents.send('ui:reply-decision', {
         accountId,
@@ -633,20 +663,42 @@ handleShell('notify:send-test', async () => {
 
 /* ------------------------------ 自动任务 ------------------------------ */
 
-/** 让指定账号的注入脚本执行任务 */
+/**
+ * 让指定账号的注入脚本执行任务。
+ * 关键：不同任务要在「对的页面」上跑——
+ *   擦亮在商品管理页，评价在订单页，其它在 IM 页。
+ * 以前统一发到 IM 页面，导致擦亮/评价必然找不到按钮。
+ */
 function executeTaskInPage(accountId, taskId, payload) {
+  const meta = tasks.RISK_LEVELS[taskId] || {};
+  // 擦亮走商品页自己的 command 通道（选择器与商品页 DOM 匹配，且会先导航到商品管理页）
+  if (taskId === 'polish') {
+    return productService.polish(accountId, payload || {});
+  }
   return new Promise((resolve) => {
-    const view = views.get(Number(accountId)) || ensureView(accountId);
-    if (!view) { resolve({ ok: false, error: '该账号没有运行中的页面' }); return; }
+    let view;
+    if (meta.page === 'order') view = ensureOrderView(accountId);
+    else view = views.get(Number(accountId)) || ensureView(accountId);
+
+    if (!view) { resolve({ ok: false, error: '该账号没有可用的运行页面' }); return; }
 
     const requestId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const timer = setTimeout(() => {
       pendingTaskRuns.delete(requestId);
       resolve({ ok: false, error: '任务执行超时' });
-    }, 30000);
+    }, 45000);
 
-    pendingTaskRuns.set(requestId, { resolve, timer, accountId, taskId });
-    const send = () => view.webContents.send('task:run', { taskId, payload, requestId });
+    pendingTaskRuns.set(requestId, { resolve, timer, accountId: Number(accountId), taskId,
+      contents: view.webContents, page: meta.page || 'im' });
+
+    const send = () => {
+      try { view.webContents.send('task:run', { taskId, payload, requestId }); }
+      catch (error) {
+        clearTimeout(timer);
+        pendingTaskRuns.delete(requestId);
+        resolve({ ok: false, error: error.message });
+      }
+    };
     if (view.webContents.isLoading()) view.webContents.once('did-finish-load', send);
     else send();
   });
@@ -655,11 +707,10 @@ function executeTaskInPage(accountId, taskId, payload) {
 const pendingTaskRuns = new Map();
 
 ipcMain.on('task:result', (event, res) => {
-  // 找到对应的 pending（用 sender 匹配账号）
-  const accountId = accountIdOfWebContents(event.sender);
-  if (!accountId) return;
-  const entry = res && pendingTaskRuns.get(res.requestId);
-  if (!entry || entry.accountId !== accountId || entry.taskId !== res.taskId) return;
+  const entry = res && res.requestId ? pendingTaskRuns.get(res.requestId) : null;
+  if (!entry || entry.contents !== event.sender) return;
+  if (event.senderFrame && event.senderFrame !== event.sender.mainFrame) return;
+  if (entry.taskId !== res.taskId) return;
   clearTimeout(entry.timer);
   pendingTaskRuns.delete(res.requestId);
   entry.resolve(res);
@@ -698,15 +749,11 @@ function startCatchupScan() {
     for (const acc of store.listAccounts().filter((account) => !account.disabled)) {
       const orders = store.listOrders(acc.id).filter((o) => /待发货/.test(o.status || ''));
       for (const o of orders) {
-        const rules = delivery.listDeliverRules(acc.id);
-        const rule = rules.find((r) => r.enabled && r.item_id === String(o.item_id));
+        const rule = delivery.resolveDeliverRule(acc.id, o.item_id);
         if (!rule) continue;
 
         // 已经发过的跳过（handleOrder 内部有幂等，但这里省一次调用）
         if (delivery.getDeliveryState(acc.id, o.order_no)) continue;
-
-        const stats = delivery.cardStats(acc.id, o.item_id);
-        if (stats.unused <= 0) continue;
 
         const imView = views.get(acc.id);
         if (!imView) continue;
@@ -716,11 +763,53 @@ function startCatchupScan() {
           accountId: acc.id,
           order: o,
           sendFn: (sessionId, text, options) => sendToSession(acc.id, sessionId, { kind: 'delivery', type: options.kind, assetId: options.assetId, content: text }, options.guard),
+          markShippedFn: async () => (await callOrderAction(acc.id, 'order:ship', { orderNo: o.order_no })).ok === true,
         });
       }
     }
   }, Math.max(5, Number(store.getSettings().tasks.catchupScan.intervalMinutes) || 30) * 60_000);
 }
+
+/* ------------------------------ 订单页常驻扫描 ------------------------------ */
+
+let orderScanTimer = null;
+
+/**
+ * 订单页常驻扫描：
+ *   - 开关打开时，为所有启用店铺打开订单页（注入脚本每 3 秒自己扫）
+ *   - 关闭时销毁订单页，释放内存
+ * 订单页默认不自动打开，因为每个店铺多一个页面会明显吃内存。
+ */
+function startOrderResidentScan() {
+  if (orderScanTimer) { clearInterval(orderScanTimer); orderScanTimer = null; }
+  const cfg = (store.getSettings().tasks || {}).orderSync || {};
+  if (!cfg.enabled) {
+    // 关掉开关时关掉订单页，避免留下后台页面
+    for (const accountId of [...orderViews.keys()]) {
+      const view = orderViews.get(accountId);
+      if (view) { try { view.webContents.destroy(); } catch (_) {} }
+      orderViews.delete(accountId);
+    }
+    return;
+  }
+  const openAll = () => {
+    for (const acc of store.listAccounts().filter((account) => !account.disabled)) {
+      ensureOrderView(acc.id);
+    }
+  };
+  openAll();
+  orderScanTimer = setInterval(openAll, 5 * 60_000);
+}
+
+handleShell('tasks:order-scan-status', () => {
+  const cfg = (store.getSettings().tasks || {}).orderSync || {};
+  return {
+    enabled: !!cfg.enabled,
+    intervalMinutes: Number(cfg.intervalMinutes) || 10,
+    openPages: [...orderViews.keys()],
+    lastLog: store.listOrderSyncLog(1)[0] || null,
+  };
+});
 
 /* ------------------------------ 凭证续期 ------------------------------ */
 
@@ -823,6 +912,7 @@ const orderViews = new Map(); // accountId -> BrowserView
 const ORDER_PAGE_URL = 'https://www.goofish.com/im?tab=order';
 
 function ensureOrderView(accountId) {
+  if (restoringBackup || restoreNeedsRestart) return null;
   accountId = Number(accountId);
   if (orderViews.has(accountId)) return orderViews.get(accountId);
 
@@ -853,6 +943,121 @@ function accountIdOfOrderWebContents(wc) {
   return null;
 }
 
+/** 通过订单页执行一个页面动作，等待注入脚本回报 */
+const orderActions = new Map(); // requestId -> { resolve, timer, contents, accountId }
+const orderActionQueues = new Map();
+
+function callOrderAction(accountId, channel, payload, timeoutMs = 25000, guard = () => true) {
+  accountId = Number(accountId);
+  const previous = orderActionQueues.get(accountId) || Promise.resolve();
+  const pending = previous.catch(() => {}).then(() => {
+    if (!guard()) return { ok: false, uncertain: false, error: '动作已取消' };
+    return dispatchOrderAction(accountId, channel, payload, timeoutMs, guard);
+  });
+  orderActionQueues.set(accountId, pending);
+  return pending.finally(() => { if (orderActionQueues.get(accountId) === pending) orderActionQueues.delete(accountId); });
+}
+
+function dispatchOrderAction(accountId, channel, payload, timeoutMs, guard) {
+  return new Promise((resolve) => {
+    const view = ensureOrderView(accountId);
+    if (!view) { resolve({ ok: false, error: '订单页未就绪' }); return; }
+    const requestId = crypto.randomUUID();
+    const finish = (result) => {
+      clearTimeout(timer);
+      orderActions.delete(requestId);
+      view.webContents.removeListener('did-finish-load', send);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish({ ok: false, uncertain: true, error: '订单页操作超时，请先人工核对' }), timeoutMs);
+    orderActions.set(requestId, { resolve, finish, timer, contents: view.webContents, accountId });
+    const send = () => {
+      if (!orderActions.has(requestId)) return;
+      const account = store.getAccount(accountId);
+      if (!guard() || !account || account.disabled || restoringBackup || restoreNeedsRestart) {
+        finish({ ok: false, uncertain: false, error: '店铺或动作已停用' }); return;
+      }
+      try { view.webContents.send(channel, { ...payload, requestId }); }
+      catch (error) {
+        finish({ ok: false, uncertain: false, error: error.message });
+      }
+    };
+    if (view.webContents.isLoading()) view.webContents.once('did-finish-load', send);
+    else send();
+  });
+}
+
+ipcMain.on('order:action-result', (event, res) => {
+  resolveOrderAction(event, res);
+});
+
+/** 发货结果走单独通道（注入脚本历史行为），统一走同一个 pending 表 */
+ipcMain.on('order:ship-result', (event, res) => {
+  resolveOrderAction(event, res);
+});
+
+function resolveOrderAction(event, res) {
+  const entry = res && res.requestId ? orderActions.get(res.requestId) : null;
+  if (!entry || entry.contents !== event.sender) return;
+  if (event.senderFrame && event.senderFrame !== event.sender.mainFrame) return;
+  const account = store.getAccount(entry.accountId);
+  if (!account || account.disabled) { entry.finish({ ok: false, uncertain: true, error: '店铺已停用' }); return; }
+  entry.finish(res);
+}
+
+/** 买家互动用的订单页动作入口（被 buyer-interaction 调用） */
+function handleOrderInteraction(accountId, action, payload, guard) {
+  const channel = action === 'rate' ? 'order:rate'
+    : action === 'receive-flower' ? 'order:receive-flower' : null;
+  if (!channel) return Promise.resolve({ ok: false, error: `不支持的订单动作 ${action}` });
+  return callOrderAction(Number(accountId), channel, payload || {}, 25000, guard);
+}
+
+function initBuyerInteraction() {
+  buyerInteraction.init({
+    ready: (accountId, action) => {
+      if (restoringBackup || restoreNeedsRestart || !legalWindow.alreadyAccepted(store)) return false;
+      if (!['thanks', 'flower'].includes(action)) return true;
+      const view = views.get(accountId);
+      return !!view && !view.webContents.isLoading() && lastLoginState.get(accountId) === true;
+    },
+    send: (accountId, sessionId, text, guard) =>
+      sendToSession(accountId, sessionId, { kind: 'interaction', content: text }, guard),
+    order: (accountId, action, payload, guard) => handleOrderInteraction(accountId, action, payload, guard),
+    onNotify: (title, body, event) => notify.notify({ title, body, event }).catch(() => {}),
+  });
+}
+
+/** 订单页全量扫描上报：入库 + 触发状态变化后的买家互动 */
+ipcMain.on('order:scan', async (event, payload) => {
+  const accountId = accountIdOfOrderWebContents(event.sender);
+  if (!accountId || event.senderFrame && event.senderFrame !== event.sender.mainFrame) return;
+  if (restoringBackup || restoreNeedsRestart || store.getAccount(accountId)?.disabled) return;
+  const orders = payload && Array.isArray(payload.orders) ? payload.orders : [];
+  const result = orderSync.ingestBatch(accountId, orders);
+  orderSync.notifySync(accountId, {
+    added: result.added, updated: result.updated, total: orders.length,
+    selector: payload && payload.selector,
+  });
+  // 交易成功的订单 → 买家互动（逐账号开关，默认关闭）
+  for (const order of result.closed) {
+    orderSync.afterClosed(accountId, order).catch((error) =>
+      console.error('[interaction]', error.message));
+  }
+  if (win && (result.added || result.updated)) {
+    win.webContents.send('ui:orders-updated', { accountId, ...result });
+  }
+});
+
+// 官方订单行出现「收下小红花」按钮时上报；逐店铺开关、永久占位由互动模块检查。
+ipcMain.on('order:flower', async (event, payload) => {
+  const accountId = accountIdOfOrderWebContents(event.sender);
+  if (!accountId || restoringBackup || restoreNeedsRestart
+      || event.senderFrame && event.senderFrame !== event.sender.mainFrame) return;
+  try { await buyerInteraction.receiveFlower({ accountId, orderNo: payload && payload.orderNo }); }
+  catch (error) { console.error('[interaction]', error.message); }
+});
+
 /** 收到「待发货」订单 → 走自动发货 */
 ipcMain.on('order:pending', async (event, order) => {
   const accountId = accountIdOfOrderWebContents(event.sender);
@@ -868,9 +1073,13 @@ ipcMain.on('order:pending', async (event, order) => {
     status: order.order_status || '待发货',
     session_id: order.session_id,
     buyer_uid: order.buyer_uid,
+    buyer_credit: order.buyer_credit,
+    buy_num: order.buy_num,
+    spec_name: order.spec_name,
+    spec_value: order.spec_value,
   });
   if (!savedOrder) return;
-  order = { ...order, session_id: savedOrder.session_id };
+  order = store.resolveOrderBuyer(accountId, { ...order, ...savedOrder });
 
   const account = store.getAccount(accountId);
   const imView = views.get(accountId);
@@ -887,17 +1096,18 @@ ipcMain.on('order:pending', async (event, order) => {
     order,
     sendFn: (sessionId, text, options) => sendToSession(accountId, sessionId, { kind: 'delivery', type: options.kind, assetId: options.assetId, content: text }, options.guard),
     markShippedFn: async () => {
-      // 目前只做「发卡密」，订单状态更新交给人工在官方页面点一次，
-      // 或后续在这里对 orderView 执行 UI 自动化。
-      return false;
+      // 在官方订单页点「发货」→ 录入虚拟发货方式 → 核对状态
+      const r = await callOrderAction(accountId, 'order:ship', { orderNo: order.order_no });
+      return !!(r && r.ok === true);
     },
   });
 
   // 推送发货结果
   if (!store.getAccount(accountId) || result.skipped) return;
   const accName = (store.getAccount(accountId) || {}).label || accountId;
+  const title = result.ok ? '自动发货成功' : (result.blocked ? '自动发货被风控拦截' : '自动发货失败');
   notify.notify({
-    title: result.ok ? '自动发货成功' : '自动发货失败',
+    title,
     body: `店铺：${accName}
 商品：${order.item_title || order.item_id || '-'}
 订单：${order.order_no}
@@ -923,14 +1133,15 @@ handleShell('delivery:save-rule', (_e, rule) => {
 handleShell('delivery:remove-rule', (_e, id) => { delivery.removeDeliverRule(id); return true; });
 
 handleShell('delivery:cards', (_e, { accountId, itemId }) => delivery.listCards(accountId, itemId));
+handleShell('delivery:remove-card', (_e, id) => { delivery.removeCard(id); return true; });
 handleShell('delivery:card-stats', (_e, { accountId }) => {
   const rules = delivery.listDeliverRules(accountId);
   const out = {};
-  for (const r of rules) out[r.item_id] = delivery.cardStats(accountId, r.item_id);
+  for (const r of rules) out[r.item_id || r.id] = delivery.cardStats(accountId, r.item_id);
   return out;
 });
-handleShell('delivery:import-cards', (_e, { accountId, itemId, text }) =>
-  delivery.importCards({ accountId, itemId, text }));
+handleShell('delivery:import-cards', (_e, { accountId, itemId, text, groupId }) =>
+  delivery.importCards({ accountId, itemId, text, groupId }));
 handleProduct('delivery:import-image-cards', async ({ accountId, itemId }) => {
   if (!store.getAccount(Number(accountId))) throw new Error('店铺不存在');
   const selected = await require('electron').dialog.showOpenDialog(win, { title: '导入图片卡密（每张一份，JPG/PNG，最大3MB）',
@@ -953,17 +1164,85 @@ handleShell('delivery:clear-cards', (_e, { accountId, itemId }) => {
 });
 handleShell('delivery:log', (_e, { accountId, limit }) => delivery.listDeliverLog(accountId, limit));
 handleShell('delivery:preview', (_e, { accountId, itemId }) => {
-  const rules = delivery.listDeliverRules(accountId);
-  const rule = rules.find((r) => r.item_id === String(itemId));
+  const rule = delivery.resolveDeliverRule(accountId, itemId);
   if (!rule) return '';
   const cards = delivery.listCards(accountId, itemId);
   const sample = cards.find((c) => c.status === 'unused');
   return delivery.previewText(rule, {
     order_no: '1234567890123456',
     buyer_nick: '买家示例',
-    item_title: rule.item_title,
+    item_title: rule.item_title || itemId,
   }, sample ? sample.content : 'SAMPLE-CARD-KEY');
 });
+
+/* ------------------------------ 发货前风控 ------------------------------ */
+
+handleShell('delivery:risk-settings', () => store.getDeliveryRiskSettings());
+handleShell('delivery:risk-save', (_e, patch) => store.saveDeliveryRiskSettings(patch));
+handleShell('delivery:block-log', (_e, { accountId, limit }) => store.listDeliveryBlockLog(accountId, limit));
+handleShell('delivery:evaluate-risk', (_e, { accountId, orderNo }) => {
+  const order = store.listOrders(accountId).find((row) => row.order_no === String(orderNo));
+  if (!order) return { ok: false, error: '订单不存在' };
+  return { ok: true, ...delivery.evaluateDeliveryRisk({ accountId, order }) };
+});
+
+/* ------------------------------ 卡券分组 ------------------------------ */
+
+handleShell('card-groups:list', (_e, accountId) => store.listCardGroups(accountId));
+handleShell('card-groups:save', (_e, group) => store.saveCardGroup(group));
+handleShell('card-groups:remove', (_e, id) => { store.removeCardGroup(id); return true; });
+
+/* ------------------------------ 订单同步 ------------------------------ */
+
+handleShell('orders:sync', (_e, accountId) => orderSync.syncNow(accountId));
+handleShell('orders:sync-log', (_e, limit) => store.listOrderSyncLog(limit));
+handleShell('orders:update', (_e, { accountId, orderNo, patch }) => {
+  const row = store.updateOrderField(accountId, orderNo, patch || {});
+  return row ? { ok: true, order: row } : { ok: false, error: '订单不存在' };
+});
+handleShell('orders:remove', (_e, { accountId, orderNo }) => ({ ok: store.removeOrder(accountId, orderNo) }));
+handleShell('orders:export-csv', async (_e, csv) => {
+  const { dialog } = require('electron');
+  const r = await dialog.showSaveDialog(win, {
+    title: '导出订单',
+    defaultPath: `订单-${new Date().toISOString().slice(0, 10)}.csv`,
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+  });
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+  try {
+    require('fs').writeFileSync(r.filePath, String(csv || ''), 'utf8');
+    return { ok: true, path: r.filePath };
+  } catch (error) { return { ok: false, error: error.message }; }
+});
+handleShell('orders:interact', async (_e, { accountId, orderNo }) => {
+  const order = store.listOrders(accountId).find((row) => row.order_no === String(orderNo));
+  if (!order) return { ok: false, error: '订单不存在' };
+  return buyerInteraction.runForOrder({ accountId: Number(accountId), order });
+});
+handleShell('orders:interaction-log', (_e, { accountId, limit }) =>
+  store.listInteractionLog(accountId, limit));
+
+/* ------------------------------ 买家互动设置 ------------------------------ */
+
+handleShell('interaction:get', (_e, accountId) => store.getBuyerInteraction(accountId));
+handleShell('interaction:save', (_e, { accountId, patch }) =>
+  store.saveBuyerInteraction(accountId, patch || {}));
+
+/* ------------------------------ 默认回复 / 商品回复 / 过滤 ------------------------------ */
+
+handleShell('default-reply:get', (_e, accountId) => store.getDefaultReply(accountId));
+handleShell('default-reply:save', (_e, { accountId, patch }) =>
+  store.saveDefaultReply(accountId, patch || {}));
+
+handleShell('item-replies:list', (_e, accountId) => store.listItemReplies(accountId));
+handleShell('item-replies:save', (_e, reply) => store.saveItemReply(reply || {}));
+handleShell('item-replies:remove', (_e, id) => { store.removeItemReply(id); return true; });
+
+handleShell('message-filters:list', (_e, accountId) => store.listMessageFilters(accountId));
+handleShell('message-filters:save', (_e, filter) => store.saveMessageFilter(filter || {}));
+handleShell('message-filters:remove', (_e, id) => { store.removeMessageFilter(id); return true; });
+
+handleShell('reply-log:list', (_e, { accountId, limit }) => store.listReplyLog(accountId, limit));
 
 /* ------------------------------ IPC: 规则 ------------------------------ */
 
@@ -1004,9 +1283,18 @@ handleShell('messages:list', (_e, { accountId, sessionId, limit }) =>
 
 handleShell('sessions:list', (_e, accountId) => {
   const s = store.ready();
-  return s.sessions
+  return store.hydrateSessionNicks(s.sessions
     .filter((x) => x.account_id === Number(accountId))
-    .sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
+    .sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0)));
+});
+
+/** 跨店铺会话列表：消息中心用 */
+handleShell('sessions:list-all', (_e, accountId) => {
+  const s = store.ready();
+  return store.hydrateSessionNicks(s.sessions
+    .filter((x) => !accountId || x.account_id === Number(accountId))
+    .filter((x) => Number(x.last_ts) > 0)
+    .sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0)));
 });
 
 /* ------------------------------ IPC: 设置 / AI ------------------------------ */
@@ -1023,7 +1311,12 @@ handleShell('settings:get', () => {
 
 handleShell('settings:update', (_e, patch) => {
   const next = store.updateSettings(patch || {});
-  if (patch && patch.tasks) { startCatchupScan(); startTokenRenew(); tasks.startScheduler(); }
+  if (patch && patch.tasks) {
+    startCatchupScan();
+    startTokenRenew();
+    startOrderResidentScan();
+    tasks.startScheduler();
+  }
   return publicSettings(next);
 });
 
@@ -1055,8 +1348,9 @@ handleShell('order:operate', async (_e, { accountId, orderNo, action, payload })
     if (order.buyer_uid && session.peer_user_id && String(order.buyer_uid) !== String(session.peer_user_id)) {
       return { ok: false, error: '买家身份与会话不一致，已拒绝关联' };
     }
-    store.upsertOrder(accountId, { ...order, session_id: sessionId });
+    const updated = store.upsertOrder(accountId, { ...order, session_id: sessionId, buyer_uid: order.buyer_uid || session.peer_user_id });
     store.persist();
+    if (buyerInteraction.isClosedDeal(updated)) orderSync.afterClosed(accountId, updated).catch((error) => console.error('[interaction]', error.message));
     return { ok: true, reason: '已关联买家会话' };
   }
   if (action === 'resolve') {
@@ -1078,39 +1372,88 @@ handleShell('order:operate', async (_e, { accountId, orderNo, action, payload })
   }
 
   if (action === 'ship') {
-    const view = ensureOrderView(accountId);
-    if (!view) return { ok: false, error: '订单页未就绪' };
-
-    // 在订单页执行发货：点发货 → 填单号 → 确认
-    const r = await new Promise((resolve) => {
-      const requestId = crypto.randomUUID();
-      const timer = setTimeout(() => { shipWaiters.delete(requestId); resolve({ ok: false, uncertain: true, error: '发货操作超时，请先核对平台订单' }); }, 25000);
-      shipWaiters.set(requestId, { resolve, timer, contents: view.webContents, accountId });
-      view.webContents.send('order:ship', {
-        orderNo,
-        waybillNo: (payload && payload.waybillNo) || '',
-        expressCode: (payload && payload.expressCode) || '',
-        requestId,
-      });
+    const r = await callOrderAction(accountId, 'order:ship', {
+      orderNo,
+      waybillNo: (payload && payload.waybillNo) || '',
+      expressCode: (payload && payload.expressCode) || '',
     });
-
     if (r.ok) store.upsertOrder(accountId, { ...order, status: '已发货' });
     return r;
+  }
+
+  if (action === 'rate') {
+    return buyerInteraction.performAction({ accountId, order, action: 'rate', manual: true, payload });
+  }
+
+  if (action === 'receive-flower') {
+    return buyerInteraction.performAction({ accountId, order, action: 'receiveFlower', manual: true });
   }
 
   return { ok: false, error: `未知操作 ${action}` };
 });
 
-const shipWaiters = new Map();
-ipcMain.on('order:ship-result', (event, res) => {
-  const entry = res && res.requestId ? shipWaiters.get(res.requestId) : null;
-  if (entry && entry.contents === event.sender && (!event.senderFrame || event.senderFrame === event.sender.mainFrame)) {
-    clearTimeout(entry.timer);
-    shipWaiters.delete(res.requestId);
-    const account = store.getAccount(entry.accountId);
-    entry.resolve(account && !account.disabled ? res : { ok: false, uncertain: true, error: '店铺已停用，请核对发货结果' });
+/* ------------------------------ 数据备份 ------------------------------ */
+
+const backup = require('./backup');
+
+handleShell('backup:export', async () => {
+  const { dialog } = require('electron');
+  const r = await dialog.showOpenDialog(win, {
+    title: '选择备份保存位置（会新建一个 OpenFish-Backup-日期 文件夹）',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+  // 导出前先把内存里的数据落盘，确保备份是最新的
+  store.flush();
+  return backup.exportBackup(app.getPath('userData'), r.filePaths[0]);
+});
+
+handleShell('backup:import', async () => {
+  const { dialog } = require('electron');
+  const r = await dialog.showOpenDialog(win, {
+    title: '选择备份文件夹（内含 state.json）',
+    properties: ['openDirectory'],
+  });
+  if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+  if (restoringBackup || restoreNeedsRestart) return { ok: false, error: '已有备份恢复任务，请重启软件' };
+  restoringBackup = true;
+  try {
+    // 先停所有生产者，再把最新内存落盘，形成完整保护副本。
+    tasks.stopScheduler(); buyerInteraction.stop(); autoRelist?.stop();
+    for (const timer of [catchupTimer, tokenTimer, orderScanTimer]) if (timer) clearInterval(timer);
+    await remoteServer?.stop();
+    for (const account of store.listAccounts()) stopAccountViews(account.id, { preserveInteractions: true });
+    store.flush();
+    const result = backup.importBackup(app.getPath('userData'), r.filePaths[0]);
+    if (result.ok || result.uncertain) {
+      store.suspendWrites();
+      restoreNeedsRestart = true;
+      if (result.ok) {
+        try {
+          for (const id of result.accountIds.filter((value) => Number.isSafeInteger(value) && value > 0)) {
+            const session = require('electron').session.fromPartition(`persist:xy-${id}`);
+            await session.clearStorageData();
+            await session.clearCache();
+          }
+        } catch (error) {
+          return { ...result, ok: false, needsRestart: true,
+            error: `数据已恢复，但旧登录态清理失败，请勿启用店铺，先重启并重新登录：${error.message}` };
+        }
+      }
+      return { ...result, needsRestart: true };
+    }
+    return result;
+  } finally {
+    restoringBackup = false;
+    if (!restoreNeedsRestart) {
+      // 校验或复制失败已回滚，恢复原档案的后台服务。
+      ensureAllViews(); tasks.startScheduler(); startCatchupScan(); startTokenRenew(); startOrderResidentScan();
+      initBuyerInteraction(); autoRelist?.start(); remoteServer?.start().catch(() => {});
+    }
   }
 });
+
+handleShell('backup:list', () => backup.listBackups(app.getPath('userData')));
 
 /* ------------------------------ IPC: 店铺分组 ------------------------------ */
 
@@ -1375,6 +1718,13 @@ if (!gotLock) {
     productDrafts = createDraftManager({ store, directory: app.getPath('userData'), nativeImage });
     productService.setDraftManager(productDrafts);
     autoRelist = require('./auto-relist').createAutoRelist({ store, drafts: productDrafts, products: productService });
+    // 订单同步与买家互动：都要用到「订单页动作」与「IM 发送」
+    orderSync.init({
+      ensureOrderPage: (id) => ensureOrderView(id),
+      onChanged: (payload) => { if (win && !win.isDestroyed()) win.webContents.send('ui:orders-updated', payload); },
+      delivery,
+    });
+    initBuyerInteraction();
     remoteServer = require('./remote-server').createRemoteServer({ store,
       dispatch: require('./remote-actions').createRemoteActions({ store, drafts: productDrafts, products: productService, send: sendToSession, history: readRemoteHistory, directory: app.getPath('userData') }),
     });
@@ -1393,6 +1743,7 @@ if (!gotLock) {
       tasks.startScheduler();
       startCatchupScan();
       startTokenRenew();
+      startOrderResidentScan();
       autoRelist.start();
     });
 
@@ -1418,6 +1769,7 @@ if (!gotLock) {
   });
 
   app.on('before-quit', (event) => {
+    buyerInteraction.stop();
     autoRelist?.stop(); remoteServer?.stop().catch(() => {});
     try { store.flush(); app.isQuitting = true; }
     catch (error) {

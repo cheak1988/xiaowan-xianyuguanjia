@@ -22,7 +22,13 @@ function readRenderedIM() {
       : unreadValue === true ? 1 : Number.parseInt(unreadValue, 10) || 0;
     const direction = typeof summary.isMyMsg === 'boolean' ? (summary.isMyMsg ? 'out' : 'in')
       : ['in', 'out'].includes(summary.direction) ? summary.direction : '';
-    conversations.push({ id, nickname: node.querySelector('[class*="title--"]')?.textContent.trim() || '',
+    // 昵称优先从 sessionInfo 的字段里取，取不到再退回 DOM 文本。
+    // 只查 DOM 时，会话列表虚拟渲染或类名变化会让昵称全变空，历史数据里就只剩会话 ID。
+    const infoNick = String(info.nickname || info.nick || info.userNick || info.peerNick
+      || info.userInfo?.nick || info.userInfo?.nickname || '').trim();
+    const domNick = node.querySelector('[class*="title--"], [class*="nickname--"], [class*="name--"]')
+      ?.textContent.trim() || '';
+    conversations.push({ id, nickname: infoNick || domNick,
       last_text: String(summary.summaryContent || '').slice(0, 500), last_ts: Number(summary.timeStamp) || 0,
       item_id: String(info.itemInfo?.itemId || ''), unread: Math.max(0, unread), last_direction: direction,
       last_message_id: String(summary.messageId || summary.msgId || ''), system: summary.type === 'system' });

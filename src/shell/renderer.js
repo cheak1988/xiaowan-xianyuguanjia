@@ -28,6 +28,11 @@ function $$(id) {
 const esc = (s) => String(s == null ? '' : s)
   .replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/* 给 renderer-features.js 用的几个访问器（避免它重复维护账号列表状态） */
+window.__xyAccounts = () => accounts;
+window.__xyCurrentAccount = () => currentAccountId;
+window.showView = (view) => switchView(view);
+
 function toast(text, ms = 2500) {
   const el = document.createElement('div');
   el.className = 'toast';
@@ -419,29 +424,40 @@ function renderDelivery() {
     box.appendChild(empty);
   }
 
+  const scopeName = { global: '全局默认', account: '本店默认', item: '商品级' };
+  const scopeColor = { global: '#8b5cf6', account: '#0ea5e9', item: '#16a34a' };
+
   for (const rule of deliverRules) {
-    const stats = cardStats[rule.item_id] || { total: 0, unused: 0, used: 0 };
-    const low = stats.unused === 0;
+    const stats = rule.item_id
+      ? (cardStats[rule.item_id] || { total: 0, unused: 0, used: 0 })
+      : { total: 0, unused: 0, used: 0 };
+    const low = rule.item_id && stats.unused === 0;
+    const scope = rule.scope || 'item';
     const el = document.createElement('div');
     el.className = 'card';
     el.innerHTML = `
       <div class="row" style="justify-content:space-between">
-        <b style="font-size:13px">${esc(rule.item_title || rule.item_id)}</b>
+        <b style="font-size:13px">${esc(rule.item_title || rule.item_id || scopeName[scope])}</b>
         <label class="switch"><input type="checkbox" ${rule.enabled ? 'checked' : ''}/><span class="muted">启用</span></label>
       </div>
-      <div class="muted" style="margin-top:3px">商品ID：${esc(rule.item_id)}</div>
-      <div class="muted">发货类型：${({ text: '文本卡密', image: '图片卡密', api: 'API 按订单取卡' })[rule.card_type] || '文本卡密'}</div>
-      <div style="margin-top:6px;font-size:13px">
+      <div class="row" style="margin-top:3px;gap:8px">
+        <span class="badge" style="background:${scopeColor[scope]}22;color:${scopeColor[scope]}">${scopeName[scope]}</span>
+        ${rule.item_id ? `<span class="muted">商品ID：${esc(rule.item_id)}</span>` : ''}
+      </div>
+      <div class="muted">发货类型：${({ text: '文本卡密', image: '图片卡密', api: 'API 按订单取卡' })[rule.card_type] || '文本卡密'}
+        ${rule.skus && rule.skus.length ? `· 已绑定 ${rule.skus.length} 个规格` : ''}</div>
+      ${rule.item_id ? `<div style="margin-top:6px;font-size:13px">
         卡密库存：
         <b style="color:${low ? '#dc2626' : '#16a34a'}">${stats.unused}</b> 条可用
         <span class="muted">（共 ${stats.total}，已用 ${stats.used}）</span>
-      </div>
+      </div>` : '<div class="muted" style="margin-top:4px">作为兜底规则：没有单独配置的商品都会用它</div>'}
       ${rule.delay_seconds ? `<div class="muted">延迟 ${rule.delay_seconds} 秒发送</div>` : ''}
       <div class="muted" style="margin-top:4px;word-break:break-all">
         模板：${esc(rule.template).slice(0, 80)}
       </div>
       <div class="row" style="margin-top:6px">
-        <button data-act="cards" style="font-size:13px">管理卡密</button>
+        ${rule.item_id ? '<button data-act="cards" style="font-size:13px">管理卡密</button>' : ''}
+        ${rule.item_id ? '<button data-act="skus" style="font-size:13px">规格绑定</button>' : ''}
         <button data-act="edit" style="font-size:13px">编辑</button>
         <button data-act="del" style="font-size:13px;color:var(--danger)">删</button>
       </div>
@@ -452,7 +468,8 @@ function renderDelivery() {
       });
       await loadDelivery();
     };
-    el.querySelector('[data-act=cards]').onclick = () => openCardManager(rule);
+    if (el.querySelector('[data-act=cards]')) el.querySelector('[data-act=cards]').onclick = () => openCardManager(rule);
+    if (el.querySelector('[data-act=skus]')) el.querySelector('[data-act=skus]').onclick = () => editSkuBinding(rule);
     el.querySelector('[data-act=edit]').onclick = () => editDeliverRule(rule);
     el.querySelector('[data-act=del]').onclick = async () => {
       const okRule2 = await window.dlg.confirm({
@@ -471,7 +488,7 @@ function renderDelivery() {
   const add = document.createElement('button');
   add.className = 'primary';
   add.style.marginTop = '4px';
-  add.textContent = '＋ 添加商品';
+  add.textContent = '＋ 添加发货规则';
   add.onclick = () => editDeliverRule(null);
   box.appendChild(add);
 
@@ -502,17 +519,33 @@ async function loadDeliverLog(container) {
 async function editDeliverRule(rule) {
   const isNew = !rule;
   const base = rule || {
+    scope: 'item',
     item_id: '', item_title: '', enabled: true,
     template: '您好，您的卡密是：{卡密}\n订单号：{订单号}\n请尽快使用，有问题随时联系~',
     delay_seconds: 0, full_auto: false,
   };
 
+  // 作用域决定「商品ID」是否必填：
+  //   商品级 → 必填，只对该商品生效
+  //   本店默认 → 不填，覆盖本店没单独配置的商品
+  //   全局默认 → 不填，覆盖所有店铺（跨店铺兜底）
+  const products = await window.api.products.list({ accountId: currentAccountId, search: '', status: '' })
+    .catch(() => []);
+
   const r = await window.dlg.form({
-    title: isNew ? '添加自动发货商品' : '编辑自动发货',
-    body: '商品ID 在闲鱼商品详情页链接里，形如 id=123456789',
+    title: isNew ? '添加发货规则' : '编辑发货规则',
+    body: '优先级：商品级 > 本店默认 > 全局默认。买家拍多件时按数量逐份发卡。',
     okText: '保存',
     fields: [
-      { key: 'item_id', label: '闲鱼商品ID', value: base.item_id, placeholder: '123456789', required: true },
+      { key: 'scope', label: '规则作用域', type: 'select', value: base.scope || 'item', options: [
+        { value: 'item', label: '指定商品（优先级最高）' },
+        { value: 'account', label: '本店默认（未单独配置的商品）' },
+        { value: 'global', label: '全局默认（所有店铺兜底）' },
+      ] },
+      { key: 'item_id', label: '闲鱼商品ID（仅商品级需要）', value: base.item_id || '',
+        placeholder: '123456789', hint: products.length
+          ? `本店已同步商品：${products.slice(0, 3).map((p) => p.item_id).join('、')}${products.length > 3 ? '…' : ''}`
+          : '商品ID 在商品详情页链接里，形如 id=123456789' },
       { key: 'item_title', label: '商品标题', value: base.item_title || '', placeholder: '方便你辨认，如：腾讯视频月卡' },
       { key: 'card_type', label: '卡密类型', type: 'select', value: base.card_type || 'text', options: [
         { value: 'text', label: '文本卡密（每行一份）' }, { value: 'image', label: '图片卡密（每张一份）' }, { value: 'api', label: 'API 按订单取卡（无需导入卡池）' },
@@ -521,24 +554,34 @@ async function editDeliverRule(rule) {
       { key: 'delay_seconds', label: '延迟发送（秒）', type: 'number', value: base.delay_seconds || 0,
         hint: '0 = 立即发送；建议 5~30 秒，避免秒发被判定异常' },
       { key: 'template', label: '消息模板', type: 'textarea', rows: 5, value: base.template || '',
-        hint: '可用变量：{卡密} {订单号} {买家昵称} {商品标题} {时间}', required: true },
+        hint: '可用变量：{卡密} {订单号} {买家昵称} {商品标题} {时间} {卡密序号} {购买数量}', required: true },
     ],
   });
   if (!r) return;
 
+  const scope = r.scope || 'item';
+  if (scope === 'item' && !String(r.item_id || '').trim()) {
+    await window.dlg.alert({ title: '缺少商品ID', body: '选择「指定商品」时必须填写闲鱼商品ID。' });
+    return;
+  }
+
   await window.api.delivery.saveRule({
     id: isNew ? undefined : base.id,
     accountId: currentAccountId,
-    item_id: String(r.item_id).trim(),
-    item_title: (r.item_title || '').trim(),
+    scope,
+    item_id: scope === 'item' ? String(r.item_id).trim() : '',
+    item_title: scope === 'item' ? (r.item_title || '').trim() : '',
     enabled: base.enabled,
     template: r.template,
-    card_type: r.card_type, api_url: r.api_url.trim(),
+    card_type: r.card_type,
+    api_url: scope === 'item' || scope === 'account' ? String(r.api_url || '').trim() : '',
     delay_seconds: Math.max(0, Number(r.delay_seconds) || 0),
-    full_auto: false,
+    full_auto: !!base.full_auto,
+    skus: base.skus || [],
+    group_id: base.group_id || null,
   });
   await loadDelivery();
-  toast(isNew ? '商品已添加' : '已保存');
+  toast(isNew ? '发货规则已添加' : '已保存');
 }
 
 async function openCardManager(rule) {
@@ -611,6 +654,85 @@ async function openCardManager(rule) {
     ).join('\n');
     await window.dlg.alert({ title: '最近 20 条已用卡密', body: list });
   }
+}
+
+/* ------------------------------ 规格绑定 ------------------------------ */
+
+/**
+ * 按规格绑定的卡密来源：
+ *   某个规格单独用固定内容（一码一单，适合不同面值）
+ *   或单独用另一个取卡接口
+ * 不绑定就落回规则本身的卡池。
+ */
+async function editSkuBinding(rule) {
+  const product = (window.__allProducts || [])
+    .find((p) => Number(p.account_id) === Number(rule.account_id) && String(p.item_id) === String(rule.item_id))
+    || (await window.api.products.list({ accountId: rule.account_id, search: '', status: '' }))
+      .find((p) => String(p.item_id) === String(rule.item_id));
+
+  const sku = product && product.sku;
+  const groups = sku && sku.enabled ? sku.groups || [] : [];
+  if (!groups.length) {
+    await window.dlg.alert({
+      title: '这个商品没有规格信息',
+      body: '规格绑定需要用「商品管理」同步过该商品，且商品本身有多规格。\n\n'
+        + '如果只是想对不同档位发不同卡密，也可以直接给每个规格建一个商品级发货规则。',
+    });
+    return;
+  }
+
+  // 把规格组合摊平成可编辑行
+  const combinations = [];
+  const walk = (index, values) => {
+    if (index >= groups.length) { combinations.push(values.slice()); return; }
+    for (const value of groups[index].values || []) { values.push(value); walk(index + 1, values); values.pop(); }
+  };
+  walk(0, []);
+  const existing = new Map((rule.skus || []).map((row) => [String(row.spec_value || ''), row]));
+
+  const box = document.createElement('div');
+  box.innerHTML = `
+    <div class="muted" style="margin-bottom:8px">
+      每一行对应一个规格组合。填了内容的规格用它自己的内容；留空则用规则默认卡池。
+    </div>
+    ${combinations.map((values) => {
+      const specValue = values.join('/');
+      const row = existing.get(values[values.length - 1]) || existing.get(specValue) || {};
+      return `<div style="border-top:1px solid var(--line);padding:8px 0">
+        <div style="font-size:13px;font-weight:600">${esc(specValue)}</div>
+        <input data-spec="${esc(values[values.length - 1])}" data-name="${esc(groups[0].name)}"
+          value="${esc(row.content || '')}" placeholder="该规格专属卡密内容（留空=用默认卡池）"
+          style="width:100%;margin-top:4px" />
+        <input data-api="${esc(values[values.length - 1])}"
+          value="${esc(row.api_url || '')}" placeholder="或填写该规格专用取卡接口（可选）"
+          style="width:100%;margin-top:4px" />
+      </div>`;
+    }).join('')}`;
+
+  const ok = await window.dlg.open({
+    title: `规格绑定 · ${rule.item_title || rule.item_id}`,
+    body: box,
+    okText: '保存',
+  });
+  if (!ok) return;
+
+  const skus = [];
+  for (const input of box.querySelectorAll('[data-spec]')) {
+    const value = input.dataset.spec;
+    const api = box.querySelector(`[data-api="${CSS.escape(value)}"]`).value.trim();
+    const content = input.value.trim();
+    if (!content && !api) continue;
+    skus.push({
+      spec_name: input.dataset.name,
+      spec_value: value,
+      content,
+      api_url: api,
+      card_type: api ? 'api' : null,
+    });
+  }
+  await window.api.delivery.saveRule({ ...rule, accountId: currentAccountId, skus });
+  toast(skus.length ? `已绑定 ${skus.length} 个规格` : '已清除规格绑定');
+  await loadDelivery();
 }
 
 /* ------------------------------ 页面级操作 ------------------------------ */
@@ -771,14 +893,19 @@ function switchSettingsTab(tab) {
 
   const map = {
     rules: 'stab-rules',
+    'default-reply': 'stab-default-reply',
+    'item-replies': 'stab-item-replies',
     quick: 'stab-quick',
     ai: 'stab-ai',
     'product-ai': 'stab-product-ai',
     relist: 'stab-relist', remote: 'stab-remote',
     delivery: 'stab-delivery',
+    'delivery-risk': 'stab-delivery-risk',
+    'buyer-interaction': 'stab-buyer-interaction',
     actions: 'stab-actions',
     notify: 'stab-notify',
     staff: 'stab-staff',
+    backup: 'stab-backup',
     disclaimer: 'stab-disclaimer',
     licenses: 'stab-licenses',
   };
@@ -803,6 +930,11 @@ function renderInto(containerId, tab) {
   if (tab === 'quick') { renderQuickReplies(container); return; }
   if (tab === 'product-ai') { window.ProductAISettings.render(container); return; }
   if (['remote', 'relist'].includes(tab)) { window.OperationsSettings[tab](container).catch(error => toast(error.message, 6000)); return; }
+  if (tab === 'default-reply') { window.XYFeatures.renderDefaultReply(container).catch((error) => toast(error.message, 6000)); return; }
+  if (tab === 'item-replies') { window.XYFeatures.renderItemReplies(container).catch((error) => toast(error.message, 6000)); return; }
+  if (tab === 'delivery-risk') { window.XYFeatures.renderDeliveryRisk(container).catch((error) => toast(error.message, 6000)); return; }
+  if (tab === 'buyer-interaction') { window.XYFeatures.renderBuyerInteraction(container).catch((error) => toast(error.message, 6000)); return; }
+  if (tab === 'backup') { window.XYFeatures.renderBackup(container).catch((error) => toast(error.message, 6000)); return; }
   if (tab === 'disclaimer') { renderDisclaimer(container); return; }
   if (tab === 'licenses') { renderLicenses(container); return; }
 
@@ -941,6 +1073,9 @@ const REFERENCED_PROJECTS = [
   { name: 'Ydisks-Xianyu-Helper', url: 'https://github.com/Christ9038/Ydisks-Xianyu-Helper',
     scope: '功能清单与交互设计：多账号管理、凭证续期、即时消息、自动化中心、卡密库存、商品管理、发货模板、订单管理、AI 回复、数据看板、通知告警、待发货兜底扫描等模块的划分方式。',
     diff: '该项目后端为 Go + MTOP 私有签名接口；本项目未使用其代码，采用 Electron 壳 + 闲鱼官方网页注入的独立实现，不调用平台私有接口。' },
+  { name: 'xianyu-super-butler（闲鱼智控 / 闲鱼超级管家）', url: 'https://github.com/23Star/xianyu-super-butler',
+    scope: '卖家侧能力的取舍与产品形态：卡券分组、三级发货规则（全局 / 指定账号 / 指定商品）、按 SKU 与多数量发货、发货前风险拦截、默认回复与回复一次、商品专属回复、消息过滤与回复决策日志、买家互动（收货致谢 / 求小红花 / 自动评价）、订单同步与备注导出等能力点的划分方式。',
+    diff: '该项目为 Python FastAPI + React 的服务端方案，通过逆向 MTOP 私有接口与 WebSocket 协议收发消息，以 AGPL-3.0 发布。本项目未使用其任何代码，仍采用 Electron 壳 + 闲鱼官方网页注入的路线，在官方页面上模拟点击与文本操作，不调用平台私有接口、不内置签名算法。两者功能有重叠但技术路线与许可证均不同，不存在代码层面的衍生关系。' },
 ];
 
 function renderLicenses(container) {
@@ -1113,6 +1248,8 @@ async function switchView(view) {
     chat: 'view-chat',
     shops: 'view-shops',
     customers: 'view-customers',
+    cards: 'view-cards',
+    inbox: 'view-inbox',
     products: 'view-products',
     orders: 'view-orders',
     tasks: 'view-tasks',
@@ -1136,6 +1273,8 @@ async function switchView(view) {
 
   if (view === 'shops') await loadShops();
   if (view === 'customers') await loadCustomers();
+  if (view === 'cards') await window.XYFeatures.loadCardLibrary();
+  if (view === 'inbox') await window.XYFeatures.loadInbox();
   if (view === 'products') await loadProducts();
   if (view === 'orders') await loadOrders();
   if (view === 'tasks') loadTasks();
@@ -1476,26 +1615,38 @@ function initOrderTable() {
         render: (r) => `<span style="font-size:13px">${esc(r.buyer_nick || '-')}</span>`,
       },
       {
-        key: 'amount', label: '金额', width: '100px', align: 'right', sortable: true,
+        key: 'amount', label: '金额', width: '110px', align: 'right', sortable: true,
         render: (r) => r.amount
-          ? `<span class="cell-price">￥${Number(r.amount).toFixed(2)}</span>`
+          ? `<span class="cell-price">￥${Number(r.amount).toFixed(2)}</span>
+             ${Number(r.buy_num) > 1 ? `<div class="cell-sub">× ${Number(r.buy_num)}</div>` : ''}`
           : '<span class="muted">-</span>',
       },
       {
-        key: 'status', label: '状态', width: '100px',
+        key: 'account', label: '店铺', width: '110px',
+        render: (r) => `<span class="cell-sub" style="font-size:13px">${esc((accounts.find((a) => a.id === r.account_id) || {}).label || '-')}</span>`,
+      },
+      {
+        key: 'status', label: '状态', width: '110px',
         render: (r) => {
           if (r.delivery_status === 'uncertain') return '<span class="st err">发送待核对</span>';
           const s = String(r.status || '');
           if (/待发货|待付款/.test(s)) return `<span class="st warn">${esc(s)}</span>`;
-          if (/已发货|已完成/.test(s)) return `<span class="st on">${esc(s)}</span>`;
+          if (/交易成功|已完成|已收货/.test(s)) return `<span class="st on">${esc(s)}</span>`;
+          if (/已发货|待收货|待评价/.test(s)) return `<span class="st info">${esc(s)}</span>`;
           if (/退款|关闭|取消/.test(s)) return `<span class="st err">${esc(s)}</span>`;
           return `<span class="st info">${esc(s || '未知')}</span>`;
         },
       },
       {
+        key: 'note', label: '备注', width: '120px',
+        render: (r) => r.note
+          ? `<span class="cell-sub" style="font-size:12.5px">${esc(r.note)}</span>`
+          : '<span class="muted">-</span>',
+      },
+      {
         key: 'created', label: '时间', width: '130px', sortable: true,
         render: (r) => {
-          const ts = r.updated_at || r.created_ts;
+          const ts = r.created_ts_from_platform || r.created_ts || r.updated_at;
           if (!ts) return '<span class="muted">-</span>';
           const d = new Date(ts);
           const p = (n) => String(n).padStart(2, '0');
@@ -1503,9 +1654,14 @@ function initOrderTable() {
         },
       },
       {
-        key: 'ops', label: '操作', width: '130px',
-        render: (r) => `<button class="act-link" data-row-act="${r.delivery_status === 'uncertain' ? 'resolve' : /已发货|已完成/.test(r.status || '') ? 'resend' : 'ship'}">${r.delivery_status === 'uncertain' ? '核对发送' : /已发货|已完成/.test(r.status || '') ? '补发' : '发货'}</button>
-          <button class="act-link" data-row-act="more" title="更多订单操作" aria-label="更多订单操作" aria-haspopup="menu">${window.UI.icon('more')}</button>`,
+        key: 'ops', label: '操作', width: '140px',
+        render: (r) => {
+          const delivered = /已发货|待收货|待评价|交易成功|交易完成|已完成|已收货/.test(r.status || '');
+          const primary = r.delivery_status === 'uncertain' ? 'resolve' : delivered ? 'resend' : 'ship';
+          const text = r.delivery_status === 'uncertain' ? '核对发送' : delivered ? '补发' : '发货';
+          return `<button class="act-link" data-row-act="${primary}">${text}</button>
+          <button class="act-link" data-row-act="more" title="更多订单操作" aria-label="更多订单操作" aria-haspopup="menu">${window.UI.icon('more')}</button>`;
+        },
       },
     ],
 
@@ -1515,10 +1671,16 @@ function initOrderTable() {
       confirm: (row) => doConfirmOrder(row),
       resolve: (row) => doResolveDelivery(row),
       'link-session': (row) => doLinkOrderSession(row),
+      note: (row) => doEditOrderNote(row),
+      rate: (row) => doRateOrder(row),
+      interact: (row) => doRunInteraction(row),
       more: (row, table, event) => window.UI.menu(event.currentTarget, [
         { label: '关联买家会话', icon: 'link', action: () => doLinkOrderSession(row) },
         { label: '补发卡密', icon: 'key', action: () => doResendOrder(row) },
         { label: '在闲鱼上发货', icon: 'send', action: () => doShipOrder(row) },
+        { label: '评价买家', icon: 'check', action: () => doRateOrder(row) },
+        { label: '执行买家互动', icon: 'chat', action: () => doRunInteraction(row) },
+        { label: '编辑备注', icon: 'edit', action: () => doEditOrderNote(row) },
         { label: '仅本地确认发货', icon: 'check', action: () => doConfirmOrder(row) },
       ]),
     },
@@ -1546,13 +1708,16 @@ function initOrderTable() {
     fetch: async ({ page, pageSize, sortKey, sortDir }) => {
       const kw = $('of-kw').value.trim().toLowerCase();
       const st = $('of-status').value;
+      const accSel = $('of-account');
+      const accFilter = accSel && accSel.value ? Number(accSel.value) : null;
 
-      let list = await window.api.orders.list(currentAccountId || null);
+      let list = await window.api.orders.list(accFilter);
       if (kw) {
         list = list.filter((o) =>
           String(o.order_no).toLowerCase().includes(kw)
           || String(o.buyer_nick || '').toLowerCase().includes(kw)
-          || String(o.item_title || '').toLowerCase().includes(kw));
+          || String(o.item_title || '').toLowerCase().includes(kw)
+          || String(o.note || '').toLowerCase().includes(kw));
       }
       if (st) list = list.filter((o) => st === 'uncertain' ? o.delivery_status === 'uncertain' : String(o.status || '').includes(st));
 
@@ -1561,7 +1726,7 @@ function initOrderTable() {
           let av = a[sortKey];
           let bv = b[sortKey];
           if (sortKey === 'amount') { av = Number(av) || 0; bv = Number(bv) || 0; }
-          else if (sortKey === 'created') { av = a.updated_at || a.created_ts || 0; bv = b.updated_at || b.created_ts || 0; }
+          else if (sortKey === 'created') { av = a.created_ts_from_platform || a.created_ts || 0; bv = b.created_ts_from_platform || b.created_ts || 0; }
           else { av = String(av || ''); bv = String(bv || ''); }
           if (av < bv) return sortDir === 'asc' ? -1 : 1;
           if (av > bv) return sortDir === 'asc' ? 1 : -1;
@@ -1580,6 +1745,14 @@ function initOrderTable() {
 
 async function loadOrders() {
   initOrderTable();
+  // 店铺筛选下拉：只有「全部店铺」时才跟随左侧选中店铺
+  const sel = $('of-account');
+  if (sel) {
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">全部店铺</option>'
+      + accounts.map((a) => `<option value="${a.id}">${esc(a.label)}</option>`).join('');
+    sel.value = keep;
+  }
   await orderTable.reload();
 }
 
@@ -1669,23 +1842,140 @@ async function doConfirmOrder(row) {
   else toast('失败：' + (r.error || ''), 4000);
 }
 
+async function doEditOrderNote(row) {
+  const r = await window.dlg.form({
+    title: '订单备注',
+    okText: '保存',
+    fields: [{
+      key: 'note', label: '备注', type: 'textarea', rows: 3,
+      value: row.note || '', placeholder: '例如：已补发一次 / 买家要求延迟发货',
+    }],
+  });
+  if (!r) return;
+  const res = await window.api.orders.update(row.account_id, row.order_no, { note: r.note });
+  toast(res.ok ? '备注已保存' : (res.error || '保存失败'), 4000);
+  orderTable.reload();
+}
+
+async function doRateOrder(row) {
+  const cfg = await window.api.interaction.get(row.account_id);
+  const r = await window.dlg.form({
+    title: '评价买家',
+    body: `订单：${row.order_no}\n买家：${row.buyer_nick || '未知'}\n\n`
+      + '评价一旦提交不可撤销。软件会在订单页找到这一单并提交。',
+    okText: '提交评价',
+    fields: [
+      { key: 'text', label: '评价内容', type: 'textarea', rows: 3,
+        value: (cfg.rate && cfg.rate.template) || '东西不错，发货很快，好评~', required: true },
+      { key: 'score', label: '评分', type: 'select', value: '5',
+        options: [{ value: '5', label: '5 星好评' }, { value: '4', label: '4 星' }] },
+    ],
+  });
+  if (!r) return;
+  const ok = await window.dlg.confirm({
+    title: '确认提交评价',
+    body: '评价提交后无法修改或删除。确认继续？',
+    okText: '确认提交', danger: true,
+  });
+  if (!ok) return;
+  toast('正在订单页提交评价…', 4000);
+  const res = await window.api.orders.operate(row.account_id, row.order_no, 'rate', {
+    text: r.text, score: Number(r.score) || 5,
+  });
+  if (res.ok) toast('已提交评价', 4000);
+  else await window.dlg.alert({
+    title: '评价未确认',
+    body: (res.error || res.reason || '未知错误')
+      + '\n\n常见原因：订单还没到可评价状态、页面结构变化、或弹窗被拦截。请在订单页人工核对。',
+  });
+  orderTable.reload();
+}
+
+async function doRunInteraction(row) {
+  const cfg = await window.api.interaction.get(row.account_id);
+  const enabled = ['thanks', 'flower', 'rate'].filter((key) => cfg[key] && cfg[key].enabled);
+  if (!enabled.length) {
+    toast('该店铺的买家互动全部关闭，请先到「设置 → 买家互动」开启', 5000);
+    return;
+  }
+  const ok = await window.dlg.confirm({
+    title: '执行买家互动',
+    body: `订单：${row.order_no}\n将执行：${enabled.map((k) => ({ thanks: '致谢', flower: '求花', rate: '评价' }[k])).join('、')}\n\n`
+      + '已执行过的项目会自动跳过。',
+    okText: '执行',
+  });
+  if (!ok) return;
+  const res = await window.api.orders.interact(row.account_id, row.order_no);
+  if (res.ok) {
+    const done = (res.results || []).filter((x) => !x.skipped);
+    toast(done.length
+      ? done.map((x) => `${({ thanks: '致谢', flower: '求花', rate: '评价' })[x.action] || x.action}${x.scheduled ? '已安排延迟执行' : x.uncertain ? '待核对' : x.ok ? '成功' : '未执行：' + (x.reason || '请查看日志')}`).join('，')
+      : '没有需要执行的项目', 5000);
+  } else {
+    toast(res.reason || res.error || '执行失败', 5000);
+  }
+  orderTable.reload();
+}
+
 /* 订单筛选事件 */
 if ($('of-search')) {
   $('of-search').onclick = () => { orderTable.page = 1; orderTable.reload(); };
   $('of-reset').onclick = () => {
     $('of-kw').value = '';
     $('of-status').value = '';
+    if ($('of-account')) $('of-account').value = '';
     orderTable.page = 1;
     orderTable.reload();
   };
   $('of-kw').onkeydown = (e) => { if (e.key === 'Enter') $('of-search').click(); };
   $('of-status').onchange = () => { orderTable.page = 1; orderTable.reload(); };
+  if ($('of-account')) $('of-account').onchange = () => { orderTable.page = 1; orderTable.reload(); };
+}
+
+/** 订单页同步：打开官方订单页并等注入脚本上报 */
+async function syncOrdersNow() {
+  const accountId = (($('of-account') || {}).value) ? Number($('of-account').value)
+    : currentAccountId;
+  if (!accountId) { toast('请先在筛选里选择店铺，或到「客服」页选中一个店铺', 4500); return; }
+  const note = $('order-sync-note');
+  if (note) note.textContent = '正在打开官方订单页并读取订单…（首次会加载页面，约需几秒）';
+  toast('正在同步订单…', 3000);
+  const r = await window.api.orders.sync(accountId);
+  if (note) {
+    note.textContent = r.ok
+      ? `同步完成：新增 ${r.added || 0} 单，更新 ${r.updated || 0} 单（页面共读到 ${r.total || 0} 单）`
+      : (r.reason || r.error || '同步失败');
+  }
+  toast(r.ok ? `订单同步完成：新增 ${r.added || 0}，更新 ${r.updated || 0}` : (r.reason || r.error || '同步失败'), 5000);
+  await orderTable.reload();
 }
 
 if ($('btn-sync-orders')) {
-  $('btn-sync-orders').onclick = async () => {
-    toast('订单同步需登录官方订单页；当前先记录自动发货产生的订单', 4500);
-    await loadOrders();
+  $('btn-sync-orders').onclick = syncOrdersNow;
+}
+
+/** 导出订单 CSV */
+if ($('btn-export-orders')) {
+  $('btn-export-orders').onclick = async () => {
+    const accountId = (($('of-account') || {}).value) ? Number($('of-account').value) : null;
+    const list = await window.api.orders.list(accountId);
+    if (!list.length) { toast('没有可导出的订单', 3500); return; }
+    const header = ['订单号', '商品ID', '商品', '买家', '金额', '数量', '规格', '状态', '备注', '下单时间'];
+    const esc2 = (v) => {
+      const s = String(v == null ? '' : v);
+      return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [header.join(',')];
+    for (const row of list) {
+      const t = row.created_ts ? new Date(row.created_ts).toLocaleString('zh-CN', { hour12: false }) : '';
+      lines.push([row.order_no, row.item_id || '', row.item_title || '', row.buyer_nick || '',
+        row.amount != null ? row.amount : '', row.buy_num || 1, row.spec_value || '',
+        row.status || '', row.note || '', t].map(esc2).join(','));
+    }
+    const csv = '\ufeff' + lines.join('\r\n');
+    const ok = await window.api.orders.exportCsv(csv);
+    if (ok && ok.ok) toast('已导出到 ' + ok.path, 5000);
+    else if (ok && !ok.ok && !ok.canceled) toast(ok.error || '导出失败', 5000);
   };
 }
 

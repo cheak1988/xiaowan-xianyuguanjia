@@ -50,6 +50,12 @@
         <button class="nav-item" data-view="customers" title="客户管理">
           <span class="nav-ico ui-icon icon-customer" aria-hidden="true"></span><span class="nav-txt">客户管理</span>
         </button>
+        <button class="nav-item" data-view="cards" title="卡密库">
+          <span class="nav-ico ui-icon icon-key" aria-hidden="true"></span><span class="nav-txt">卡密库</span>
+        </button>
+        <button class="nav-item" data-view="inbox" title="消息中心">
+          <span class="nav-ico ui-icon icon-bell" aria-hidden="true"></span><span class="nav-txt">消息中心</span>
+        </button>
         <button class="nav-item" data-view="tasks" title="自动任务">
           <span class="nav-ico ui-icon icon-task" aria-hidden="true"></span><span class="nav-txt">自动任务</span>
         </button>
@@ -245,9 +251,12 @@
         <div class="page-head">
           <div>
             <h2>订单管理</h2>
-            <div class="sub">查看订单状态，执行发货或补发</div>
+            <div class="sub">同步官方订单页，查看状态、金额、发货与买家互动</div>
           </div>
-          <button id="btn-sync-orders"><span class="ui-icon icon-refresh" aria-hidden="true"></span>同步订单</button>
+          <div class="row">
+            <button id="btn-sync-orders"><span class="ui-icon icon-refresh" aria-hidden="true"></span>同步订单</button>
+            <button id="btn-export-orders"><span class="ui-icon icon-upload" aria-hidden="true"></span>导出</button>
+          </div>
         </div>
         <div class="page-body">
           <div class="section-tabs" id="order-status-tabs" role="group" aria-label="按订单状态筛选">
@@ -255,7 +264,9 @@
             <button class="section-tab" data-order-status="待发货">待发货</button>
             <button class="section-tab" data-order-status="uncertain">发送待核对</button>
             <button class="section-tab" data-order-status="已发货">已发货</button>
+            <button class="section-tab" data-order-status="交易成功">交易成功</button>
           </div>
+          <div id="order-sync-note" class="goods-sync-note" role="status">订单页需保持打开才能持续同步；点「同步订单」会打开该店铺的官方订单页并读取当前列表。</div>
           <div class="filter-bar">
             <div class="filter-row">
               <div class="filter-item">
@@ -269,7 +280,12 @@
                   <option value="待发货">待发货</option>
                   <option value="uncertain">发送待核对</option>
                   <option value="已发货">已发货</option>
+                  <option value="交易成功">交易成功</option>
                 </select>
+              </div>
+              <div class="filter-item">
+                <label>店铺</label>
+                <select id="of-account"><option value="">全部店铺</option></select>
               </div>
             </div>
             <div class="filter-actions">
@@ -278,6 +294,85 @@
             </div>
           </div>
           <div id="order-list"></div>
+        </div>
+      </div>
+
+      <!-- 卡密库视图 -->
+      <div id="view-cards" class="page-view">
+        <div class="page-head">
+          <div>
+            <h2>卡密库</h2>
+            <div class="sub">所有商品卡密、分组与使用状态，支持批量导入</div>
+          </div>
+          <div class="row">
+            <button id="btn-card-groups"><span class="ui-icon icon-folder" aria-hidden="true"></span>管理分组</button>
+            <button id="btn-import-cards" class="primary"><span class="ui-icon icon-upload" aria-hidden="true"></span>导入卡密</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="filter-bar">
+            <div class="filter-row">
+              <div class="filter-item">
+                <label>关键词</label>
+                <input id="cf-kw-cards" placeholder="卡密内容 / 商品ID" />
+              </div>
+              <div class="filter-item">
+                <label>店铺</label>
+                <select id="cf-account-cards"><option value="">全部店铺</option></select>
+              </div>
+              <div class="filter-item">
+                <label>状态</label>
+                <select id="cf-status-cards">
+                  <option value="">全部</option>
+                  <option value="unused">可用</option>
+                  <option value="reserved">占用中</option>
+                  <option value="used">已用</option>
+                </select>
+              </div>
+            </div>
+            <div class="filter-actions">
+              <button class="primary" id="cf-search-cards" style="font-size:12px">查询</button>
+              <button id="cf-reset-cards" style="font-size:12px">重置</button>
+            </div>
+          </div>
+          <div id="card-stat-grid" class="stats-grid" style="margin-bottom:16px"></div>
+          <div id="card-list"></div>
+        </div>
+      </div>
+
+      <!-- 消息中心视图 -->
+      <div id="view-inbox" class="page-view">
+        <div class="page-head">
+          <div>
+            <h2>消息中心</h2>
+            <div class="sub">跨店铺会话与自动回复决策日志</div>
+          </div>
+          <div class="row">
+            <button id="btn-refresh-inbox"><span class="ui-icon icon-refresh" aria-hidden="true"></span>刷新</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="section-tabs" role="group" aria-label="消息中心内容">
+            <button class="section-tab on" data-inbox-mode="sessions">会话</button>
+            <button class="section-tab" data-inbox-mode="replylog">回复日志</button>
+            <button class="section-tab" data-inbox-mode="filters">过滤与黑名单</button>
+          </div>
+          <div class="filter-bar" id="inbox-filter-bar">
+            <div class="filter-row">
+              <div class="filter-item">
+                <label>关键词</label>
+                <input id="ib-kw" placeholder="买家 / 消息内容" />
+              </div>
+              <div class="filter-item">
+                <label>店铺</label>
+                <select id="ib-account"><option value="">全部店铺</option></select>
+              </div>
+            </div>
+            <div class="filter-actions">
+              <button class="primary" id="ib-search" style="font-size:12px">查询</button>
+            </div>
+          </div>
+          <div id="inbox-list"></div>
         </div>
       </div>
 
@@ -349,30 +444,40 @@
         <div class="settings-layout">
           <aside class="settings-nav">
             <div class="snav-item on" data-stab="rules">关键词回复</div>
+            <div class="snav-item" data-stab="default-reply">默认回复</div>
+            <div class="snav-item" data-stab="item-replies">商品专属回复</div>
             <div class="snav-item" data-stab="quick">快捷话术</div>
             <div class="snav-item" data-stab="ai">客服回复 AI</div>
             <div class="snav-item" data-stab="product-ai">商品文案 AI</div>
             <div class="snav-item" data-stab="relist">自动续售</div>
             <div class="snav-item" data-stab="remote">远程协作</div>
             <div class="snav-item" data-stab="delivery">自动发货</div>
+            <div class="snav-item" data-stab="delivery-risk">发货风控</div>
+            <div class="snav-item" data-stab="buyer-interaction">买家互动</div>
             <div class="snav-item" data-stab="actions">页面操作</div>
             <div class="snav-item" data-stab="notify">通知告警</div>
             <div class="snav-item" data-stab="staff">客服管理</div>
+            <div class="snav-item" data-stab="backup">数据备份</div>
             <div class="snav-sep"></div>
             <div class="snav-item" data-stab="disclaimer">免责声明</div>
             <div class="snav-item" data-stab="licenses">开源声明</div>
           </aside>
           <div class="settings-body">
             <div id="stab-rules"></div>
+            <div id="stab-default-reply" style="display:none"></div>
+            <div id="stab-item-replies" style="display:none"></div>
             <div id="stab-quick" style="display:none"></div>
             <div id="stab-ai" style="display:none"></div>
             <div id="stab-product-ai" style="display:none"></div>
             <div id="stab-relist" style="display:none"></div>
             <div id="stab-remote" style="display:none"></div>
             <div id="stab-delivery" style="display:none"></div>
+            <div id="stab-delivery-risk" style="display:none"></div>
+            <div id="stab-buyer-interaction" style="display:none"></div>
             <div id="stab-actions" style="display:none"></div>
             <div id="stab-notify" style="display:none"></div>
             <div id="stab-staff" style="display:none"></div>
+            <div id="stab-backup" style="display:none"></div>
             <div id="stab-disclaimer" style="display:none"></div>
             <div id="stab-licenses" style="display:none"></div>
           </div>
@@ -426,6 +531,7 @@
   <script src="operations-settings.js"></script>
   <script src="message-sound.js"></script>
   <script src="renderer.js"></script>
+  <script src="renderer-features.js"></script>
   <script src="goods-options.js"></script>
   <script src="product-editor.js"></script>
 </body>

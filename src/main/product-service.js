@@ -354,6 +354,17 @@ function createProductService({ store, views, parent, onUpdated, scanTtlMs = 15 
     sync(id, options) { return locked(id, () => scan(id, options)); },
     scanPreview(id) { return locked(id, () => scan(id, { preview: true })); },
     importSelected,
+    /** 擦亮：走商品管理页，不需要 busy 锁（不影响发布流程） */
+    async polish(id, payload = {}) {
+      const row = account(id);
+      const view = ensureView(id);
+      // 确保页面在商品管理页，而不是任意的个人主页
+      if (!/\/personal|\/seller|item/.test(String(view.webContents.getURL() || ''))) {
+        try { const uid = await identity(id); await navigate(id, `${ORIGIN}/personal?userId=${encodeURIComponent(uid)}`); }
+        catch (_) { await navigate(id, `${ORIGIN}/personal`); }
+      }
+      return request(id, 'polish', payload, 120000);
+    },
     async open(id) {
       try { const uid = await identity(id); await navigate(id, `${ORIGIN}/personal?userId=${uid}`); }
       catch (_) { await navigate(id, `${ORIGIN}/personal`); }
