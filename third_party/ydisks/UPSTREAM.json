@@ -1,0 +1,8 @@
+{
+  "name": "Ydisks-Xianyu-Helper",
+  "repository": "https://github.com/Christ9038/Ydisks-Xianyu-Helper",
+  "commit": "7814d053cf2ea296f0072051b666cd7e95a76d17",
+  "version": "core-7814d053cf2e",
+  "license": "Apache-2.0",
+  "modifications": "None. Original Go backend and React frontend are built unchanged and embedded as a local service."
+}
