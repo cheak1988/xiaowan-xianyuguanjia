@@ -2769,16 +2769,41 @@ function renderNotify() {
     <div class="field" style="margin-top:14px"><label for="msg-alert-volume">提示音音量</label>
       <div class="row" style="gap:12px;flex-wrap:wrap"><input id="msg-alert-volume" type="range" min="0" max="100" value="${esc(Math.max(0, Math.min(100, Number(local.volume ?? 60) || 0)))}" style="width:180px;padding:0" aria-label="新消息提示音音量"><output id="msg-alert-level" for="msg-alert-volume"></output><button id="msg-alert-preview" type="button">试听提示音</button></div>
     </div>
+    <div class="field" style="margin-top:14px"><label>提示音文件</label>
+      <div class="row" style="gap:12px;flex-wrap:wrap">
+        <span id="msg-alert-sound-name" class="muted" style="min-width:0;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${local.soundFile ? esc(local.soundFile.replace(/^.*[\\/]/, '')) : '内置默认音（偏轻，可在下面换成自己的铃声）'}</span>
+        <button id="msg-alert-pick" type="button">选择音频…</button>
+        <button id="msg-alert-clear" type="button" ${local.soundFile ? '' : 'disabled'}>恢复默认</button>
+      </div>
+    </div>
     <div class="row" style="margin-top:12px;gap:10px"><button class="primary" id="msg-alert-save">保存提醒设置</button><span id="msg-alert-result" role="status" aria-live="polite" class="muted"></span></div>
     <p class="muted" style="line-height:1.8;margin:10px 0 0">点击桌面通知可打开对应店铺与买家会话；有未发送草稿时会保留草稿并提示。桌面弹窗受 Windows 通知和勿扰设置影响，提示音受系统音量影响。超时未回复提醒仍在「关键词回复」中单独设置。</p>`;
   box.appendChild(alerts);
   const volume = alerts.querySelector('#msg-alert-volume');
   const result = alerts.querySelector('#msg-alert-result');
+  // 待保存的自定义提示音路径（选完文件先暂存，点保存才落盘到设置）
+  let pendingSoundFile = local.soundFile || '';
   volume.oninput = () => { alerts.querySelector('#msg-alert-level').textContent = volume.value + '%'; result.textContent = '修改后请保存'; };
   volume.oninput(); result.textContent = '';
-  alerts.querySelector('#msg-alert-preview').onclick = async () => {
-    try { await window.MessageSound.play(volume.value); result.textContent = '正在试听；此音量需保存后生效'; }
+  const playPreview = async (soundFile) => {
+    try { await window.MessageSound.play(volume.value, soundFile); result.textContent = '正在试听；此设置需保存后生效'; }
     catch (error) { result.textContent = error.message || '播放失败，请检查系统音量和音频设备'; }
+  };
+  alerts.querySelector('#msg-alert-preview').onclick = () => playPreview(pendingSoundFile);
+  alerts.querySelector('#msg-alert-pick').onclick = async () => {
+    const res = await window.api.messageAlerts.pickSound();
+    if (!res || res.canceled) return;
+    if (!res.ok) { result.textContent = res.error || '选择失败'; return; }
+    pendingSoundFile = res.soundFile;
+    alerts.querySelector('#msg-alert-sound-name').textContent = res.name;
+    alerts.querySelector('#msg-alert-clear').disabled = false;
+    result.textContent = '已选择，点「试听」可预览，保存后生效';
+  };
+  alerts.querySelector('#msg-alert-clear').onclick = () => {
+    pendingSoundFile = '';
+    alerts.querySelector('#msg-alert-sound-name').textContent = '内置默认音（偏轻，可在下面换成自己的铃声）';
+    alerts.querySelector('#msg-alert-clear').disabled = true;
+    result.textContent = '已恢复默认，保存后生效';
   };
   alerts.querySelector('#msg-alert-save').onclick = async () => {
     try {
@@ -2786,6 +2811,7 @@ function renderNotify() {
         enabled: alerts.querySelector('#msg-alert-enabled').checked,
         soundEnabled: alerts.querySelector('#msg-alert-sound').checked,
         desktopEnabled: alerts.querySelector('#msg-alert-desktop').checked, volume: Number(volume.value),
+        soundFile: pendingSoundFile,
       } });
       result.textContent = '已保存，所有店铺立即生效';
     } catch (error) { result.textContent = '保存失败：' + error.message; }

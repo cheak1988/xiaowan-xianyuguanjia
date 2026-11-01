@@ -1,6 +1,6 @@
 'use strict';
 
-const DEFAULTS = { enabled: true, soundEnabled: true, desktopEnabled: true, volume: 60 };
+const DEFAULTS = { enabled: true, soundEnabled: true, desktopEnabled: true, volume: 60, soundFile: '' };
 const textOf = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 const timestamp = (value) => {
   const n = Number(value);
@@ -15,6 +15,8 @@ function normalizeConfig(value = {}) {
     soundEnabled: value.soundEnabled !== false,
     desktopEnabled: value.desktopEnabled !== false,
     volume: Number.isFinite(volume) ? Math.max(0, Math.min(100, volume)) : DEFAULTS.volume,
+    // 自定义提示音文件（userData 下的绝对路径或 file:// URL）；空 = 内置默认音
+    soundFile: String(value.soundFile || '').trim(),
   };
 }
 
@@ -52,6 +54,7 @@ function createMessageAlerts({ getSettings, playSound, showNotification, flash, 
       accountLabel: textOf(account.label).slice(0, 80) || '店铺',
       peerNick: textOf(peerNick).slice(0, 80) || '买家',
       text: textOf(text).slice(0, 120) || '收到一条新消息', volume: cfg.volume,
+      soundFile: cfg.soundFile,
     };
     for (const action of [
       () => flash(detail),

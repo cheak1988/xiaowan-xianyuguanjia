@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld('api', {
     onOpen: (cb) => ipcRenderer.on('ui:open-message', (_e, p) => cb(p)),
     onError: (cb) => ipcRenderer.on('ui:message-alert-error', (_e, text) => cb(text)),
     focus: (accountId, sessionId) => ipcRenderer.invoke('messages:focus', { accountId, sessionId }),
+    pickSound: () => ipcRenderer.invoke('alerts:pick-sound'),
+    previewSound: (soundFile) => ipcRenderer.invoke('alerts:preview-sound', soundFile),
   },
   rules: {
     list: (accountId) => ipcRenderer.invoke('rules:list', accountId),

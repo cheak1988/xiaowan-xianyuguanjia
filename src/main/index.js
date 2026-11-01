@@ -10,7 +10,7 @@
  *     → 这是「多店铺消息回复」的前提：后台店铺也要在线
  */
 
-const { app, BrowserWindow, BrowserView, ipcMain, Tray, Menu, nativeImage, shell, safeStorage, Notification } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, Tray, Menu, nativeImage, shell, safeStorage, Notification, dialog } = require('electron');
 const path = require('path');
 const store = require('./store');
 const replyEngine = require('./reply-engine');
@@ -67,7 +67,11 @@ let tray = null;
 const messageNotifications = new Set();
 const messageAlerts = createMessageAlerts({
   getSettings: () => store.getSettings(),
-  playSound: (detail) => { if (win && !win.isDestroyed()) win.webContents.send('ui:message-sound', { volume: detail.volume }); },
+  playSound: (detail) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('ui:message-sound', { volume: detail.volume, soundFile: detail.soundFile || '' });
+    }
+  },
   flash: () => { if (win && !win.isDestroyed() && !win.isFocused?.()) win.flashFrame?.(true); },
   showNotification: (detail) => {
     if (!Notification?.isSupported()) return;
@@ -581,6 +585,40 @@ ipcMain.on('im:message', async (event, payload) => {
 });
 
 // 注入层回报发送结果
+
+/* 自定义新消息提示音：选择文件 → 复制到 userData/sounds/（重启依赖少、防原文件移动/删除） */
+handleShell('alerts:pick-sound', async () => {
+  const fs = require('fs');
+  const selected = await dialog.showOpenDialog(win, {
+    title: '选择新消息提示音（WAV/MP3，建议 2 秒内）',
+    properties: ['openFile'],
+    filters: [{ name: '音频', extensions: ['wav', 'mp3', 'ogg', 'm4a'] }],
+  });
+  if (selected.canceled || !selected.filePaths.length) return { ok: true, canceled: true };
+  const src = selected.filePaths[0];
+  const stat = fs.statSync(src);
+  if (!stat.isFile() || stat.size > 5 * 1024 * 1024) return { ok: false, error: '音频文件不能超过 5MB' };
+  const soundsDir = path.join(app.getPath('userData'), 'sounds');
+  fs.mkdirSync(soundsDir, { recursive: true });
+  const extension = path.extname(src).toLowerCase() || '.wav';
+  // 同一文件重复选择不堆积副本
+  const hash = crypto.createHash('sha256').update(fs.readFileSync(src)).digest('hex').slice(0, 16);
+  const dest = path.join(soundsDir, `alert-${hash}${extension}`);
+  if (dest !== src) fs.copyFileSync(src, dest);
+  return { ok: true, soundFile: dest, name: path.basename(src) };
+});
+
+/* 试听：直接在渲染层播放所选文件或默认音，不落设置 */
+handleShell('alerts:preview-sound', (_event, soundFile) => {
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('ui:message-sound', {
+      volume: store.getSettings().messageAlerts?.volume ?? 60,
+      soundFile: String(soundFile || ''),
+    });
+  }
+  return { ok: true };
+});
+
 handleShell('messages:focus', (_event, { accountId, sessionId } = {}) => {
   const account = store.getAccount(accountId);
   if (!account || account.disabled || !sessionId || String(sessionId).length > 200) return { ok: false, error: '店铺或会话不可用' };
