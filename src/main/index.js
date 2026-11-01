@@ -764,6 +764,9 @@ function startCatchupScan() {
           order: o,
           sendFn: (sessionId, text, options) => sendToSession(acc.id, sessionId, { kind: 'delivery', type: options.kind, assetId: options.assetId, content: text }, options.guard),
           markShippedFn: async () => (await callOrderAction(acc.id, 'order:ship', { orderNo: o.order_no })).ok === true,
+          autoCloseOrderFn: (aId, orderNo) => callOrderAction(aId, 'order:close', { orderNo }),
+          orderClosedFn: async (aId, orderNo) =>
+            !!(await callOrderAction(aId, 'order:close', { orderNo })).ok === true,
         });
       }
     }
@@ -1098,6 +1101,12 @@ ipcMain.on('order:pending', async (event, order) => {
     markShippedFn: async () => {
       // 在官方订单页点「发货」→ 录入虚拟发货方式 → 核对状态
       const r = await callOrderAction(accountId, 'order:ship', { orderNo: order.order_no });
+      return !!(r && r.ok === true);
+    },
+    // 风控命中后可选自动关单；开启「仅关单后发卡」时补发前先核对关单状态
+    autoCloseOrderFn: (accId, orderNo) => callOrderAction(accId, 'order:close', { orderNo }),
+    orderClosedFn: async (accId, orderNo) => {
+      const r = await callOrderAction(accId, 'order:close', { orderNo });
       return !!(r && r.ok === true);
     },
   });
@@ -1483,6 +1492,13 @@ handleShell('customers:upsert-session', (_e, { accountId, session }) => {
 handleShell('quickreplies:list', (_e, accountId) => store.listQuickReplies(accountId));
 handleShell('quickreplies:save', (_e, r) => store.saveQuickReply(r));
 handleShell('quickreplies:remove', (_e, id) => { store.removeQuickReply(id); return true; });
+// 一键发送：核验会话归属后走 sendToSession，成功才累计 use_count
+handleShell('quickreplies:send', async (_e, { accountId, sessionId, replyId }) => {
+  const q = store.touchQuickReply(replyId);
+  if (!q) return { ok: false, error: '话术不存在或已删除' };
+  const result = await sendToSession(Number(accountId), String(sessionId), { kind: 'quick', content: q.content });
+  return { ...result, title: q.title };
+});
 
 /* ------------------------------ IPC: 商品/订单/看板 ------------------------------ */
 

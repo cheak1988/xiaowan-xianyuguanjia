@@ -138,8 +138,9 @@ function decide({ accountId, account, session, message, settings }) {
     }
   }
 
-  // 2) 规则
-  const ruleHits = rules.match(accountId, message, session);
+  // 2) 规则（mode:'always' 时跳过规则与默认回复，除黑名单等前置拦截外全走 AI）
+  const alwaysMode = s.ai.enabled && s.ai.mode === 'always';
+  const ruleHits = alwaysMode ? [] : rules.match(accountId, message, session);
   // 只保留有实际内容的回复（避免发出空白消息）
   const usable = ruleHits.filter((r) => {
     const hasText = r.content && String(r.content).trim();
@@ -163,7 +164,7 @@ function decide({ accountId, account, session, message, settings }) {
   if (s.ai.enabled) {
     return {
       action: 'ai',
-      reason: '规则未命中，走 AI',
+      reason: alwaysMode ? 'AI 优先模式（mode=always）' : '规则未命中，走 AI',
       replies: [],
       pendingText: text,
       quietKey: key,

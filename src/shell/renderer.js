@@ -303,6 +303,14 @@ function renderAi() {
       <input id="ai-model" value="${esc(ai.model)}" placeholder="gpt-4o-mini / deepseek-chat / qwen2.5" />
     </div>
 
+    <div class="field">
+      <label>回复模式</label>
+      <select id="ai-mode">
+        <option value="fallback" ${ai.mode !== 'always' ? 'selected' : ''}>AI 兜底（关键词规则优先，AI 接住没命中的）</option>
+        <option value="always" ${ai.mode === 'always' ? 'selected' : ''}>AI 优先（所有买家消息都由 AI 回复，黑名单/过滤词仍然生效）</option>
+      </select>
+    </div>
+
     <div class="row" style="gap:10px">
       <div class="field" style="flex:1">
         <label>温度</label>
@@ -342,6 +350,7 @@ function renderAi() {
         enabled: box.querySelector('#ai-enabled').checked,
         baseURL: box.querySelector('#ai-base').value.trim(),
         model: box.querySelector('#ai-model').value.trim(),
+        mode: box.querySelector('#ai-mode').value === 'always' ? 'always' : 'fallback',
         temperature: Number(box.querySelector('#ai-temp').value),
         maxReplyChars: Number(box.querySelector('#ai-max').value),
         quietMinutes: Number(box.querySelector('#ai-quiet').value),
@@ -1167,9 +1176,40 @@ async function renderQuickReplies(container) {
       + '</div>'
       + '<div class="muted" style="margin-top:5px;white-space:pre-wrap">' + esc(q.content).slice(0, 120) + '</div>'
       + '<div class="row" style="margin-top:7px;gap:8px">'
+      + '<button data-act="send" style="font-size:13px;color:var(--primary)">发送到会话…</button>'
       + '<button data-act="edit" style="font-size:13px">编辑</button>'
       + '<button data-act="del" style="font-size:13px;color:var(--danger)">删除</button>'
       + '</div>';
+
+    el.querySelector('[data-act=send]').onclick = async () => {
+      // 选店铺（未选店铺时）→ 选会话 → 发送
+      const accounts = await window.api.accounts.list();
+      const active = accounts.filter((a) => !a.disabled);
+      if (!active.length) { toast('没有可用店铺，请先登录', 4000); return; }
+      let accId = currentAccountId;
+      if (!accId || !active.some((a) => a.id === accId)) {
+        const r = await window.dlg.form({
+          title: '选择店铺', okText: '下一步',
+          fields: [{ key: 'acc', label: '店铺', type: 'select', options: active.map((a) => ({ value: a.id, label: a.label || ('店铺 ' + a.id) })), required: true }],
+        });
+        if (!r) return;
+        accId = Number(r.acc);
+      }
+      const sessions = await window.api.sessions.list(accId);
+      const recent = sessions.filter((x) => Number(x.last_ts) > 0).slice(0, 30);
+      if (!recent.length) { toast('该店铺暂无会话', 4000); return; }
+      const r2 = await window.dlg.form({
+        title: '选择会话', okText: '发送',
+        fields: [{ key: 'sid', label: '会话（最近 30 个）', type: 'select',
+          options: recent.map((x) => ({ value: x.id, label: (x.peer_nick || ('会话 ' + x.id)) })), required: true }],
+      });
+      if (!r2) return;
+      toast('发送中…');
+      const res = await window.api.quickReplies.send({ accountId: accId, sessionId: r2.sid, replyId: q.id });
+      if (res.ok) toast('已发送「' + q.title + '」');
+      else toast('发送失败：' + (res.error || res.reason || '未知错误'), 6000);
+      renderQuickReplies(container);
+    };
 
     el.querySelector('[data-act=edit]').onclick = async () => {
       const r = await window.dlg.form({

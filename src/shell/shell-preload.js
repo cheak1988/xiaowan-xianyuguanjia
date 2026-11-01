@@ -194,6 +194,7 @@ contextBridge.exposeInMainWorld('api', {
     list: (accountId) => ipcRenderer.invoke('quickreplies:list', accountId),
     save: (r) => ipcRenderer.invoke('quickreplies:save', r),
     remove: (id) => ipcRenderer.invoke('quickreplies:remove', id),
+    send: (payload) => ipcRenderer.invoke('quickreplies:send', payload),
   },
   orders: {
     list: (accountId) => ipcRenderer.invoke('orders:list', accountId),

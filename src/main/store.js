@@ -95,6 +95,10 @@ const DEFAULT_SETTINGS = {
     buyerHasOpenOrder: { enabled: false, sameItemOnly: false },
     buyerHasOpenOrderGlobal: { enabled: false, sameItemOnly: false },
     buyerLowCredit: { enabled: false, threshold: 0 },
+    /** 命中风控后自动到订单页关闭交易（仅待付款单可关）；关单结果不确定时不发货 */
+    autoCloseOrder: { enabled: false },
+    /** 开启后，只有平台确认关闭/取消的订单才允许补发卡密 */
+    onlyCardAfterClose: false,
   },
   /** 订单同步 */
   orderSync: { autoOpenPage: false, pageIntervalSeconds: 30 },
@@ -933,6 +937,13 @@ function removeQuickReply(id) {
   scheduleSave();
 }
 
+/** 一键发送后累计使用次数（供排序/展示） */
+function touchQuickReply(id) {
+  const q = (ready().quickReplies || []).find((x) => x.id === Number(id));
+  if (q) { q.use_count = (q.use_count || 0) + 1; q.last_used_at = Date.now(); scheduleSave(); }
+  return q || null;
+}
+
 /* ------------------------------ 通知日志 ------------------------------ */
 
 function pushNotifyLog(entry) {
@@ -1468,7 +1479,7 @@ module.exports = {
   listProducts, upsertProduct, removeProduct, importProductsCsv,
   listShopGroups, saveShopGroup, removeShopGroup,
   listCustomers, upsertCustomer, updateCustomer, removeCustomer, listCustomerTags,
-  listQuickReplies, saveQuickReply, removeQuickReply,
+  listQuickReplies, saveQuickReply, removeQuickReply, touchQuickReply,
   listOrders, upsertOrder, resolveOrderBuyer, updateOrderField, removeOrder, getStats,
   pushOrderSyncLog, listOrderSyncLog,
   listCardGroups, saveCardGroup, removeCardGroup,

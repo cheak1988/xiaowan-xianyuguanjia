@@ -419,10 +419,12 @@ function pickUnusedCard(accountId, itemId, cardType, groupId) {
  * @param {object} p.order   { order_no, item_id, item_title, buyer_nick, buyer_uid, session_id, order_status, buy_num, spec_name, spec_value }
  * @param {Function} p.sendFn  发送卡密到 IM 的函数 (sessionId, text) => Promise
  * @param {Function} [p.markShippedFn]  在官方订单页执行发货的函数
+ * @param {Function} [p.autoCloseOrderFn]  风控命中后自动关单 (accountId, orderNo) => Promise<{ok}>
+ * @param {Function} [p.orderClosedFn]  核对订单是否已关闭 (accountId, orderNo) => Promise<boolean>
  * @param {boolean} [p.skipRisk]  人工补发时跳过风控（默认 false）
  * @returns {Promise<{ok:boolean, reason:string, card?:string}>}
  */
-async function handleOrder({ accountId, order, sendFn, markShippedFn, resend = false, cardContent, skipRisk = false }) {
+async function handleOrder({ accountId, order, sendFn, markShippedFn, autoCloseOrderFn, orderClosedFn, resend = false, cardContent, skipRisk = false }) {
   accountId = Number(accountId);
   order = store.resolveOrderBuyer(accountId, order);
   const orderNo = String(order.order_no || '');
@@ -476,9 +478,43 @@ async function handleOrder({ accountId, order, sendFn, markShippedFn, resend = f
           buyer_uid: order.buyer_uid || null, buyer_nick: order.buyer_nick || '',
           rule: risk.rule, reason: risk.reason,
         });
+        // 可选：自动到订单页关闭交易，把风控从「拦截发货」推进为「闭环处置」
+        const riskSettings = store.getDeliveryRiskSettings();
+        if (riskSettings.autoCloseOrder && riskSettings.autoCloseOrder.enabled && autoCloseOrderFn) {
+          let closeNote;
+          try {
+            const closeRes = await autoCloseOrderFn(accountId, orderNo);
+            closeNote = closeRes && closeRes.ok === true
+              ? '自动关单成功'
+              : `自动关单未确认（${closeRes && closeRes.error || '未知原因'}）`;
+          } catch (error) {
+            closeNote = `自动关单异常：${error.message}`;
+          }
+          store.pushDeliveryBlockLog({
+            account_id: accountId, order_no: orderNo, item_id: order.item_id,
+            rule: risk.rule, reason: `${closeNote}：${risk.reason}`,
+          });
+        }
         pushDeliverLog({ account_id: accountId, order_no: orderNo, item_id: order.item_id,
           ok: false, blocked: true, rule: risk.rule, reason: `风控拦截：${risk.reason}` });
         return { ok: false, blocked: true, riskRule: risk.rule, reason: `风控拦截：${risk.reason}` };
+      }
+    }
+
+    // onlyCardAfterClose：连人工补发也必须先核对订单已关闭（防被拉黑买家反复拍）
+    if (skipRisk || resend) {
+      const riskSettings = store.getDeliveryRiskSettings();
+      if (riskSettings.onlyCardAfterClose && orderClosedFn) {
+        const status = String((order && order.status) || '');
+        const closed = /关闭|取消|退款成功|已退款/.test(status)
+          || (await orderClosedFn(accountId, orderNo)) === true;
+        if (!closed) {
+          pushDeliverLog({ account_id: accountId, order_no: orderNo, item_id: order.item_id,
+            ok: false, blocked: true, rule: 'onlyCardAfterClose',
+            reason: '已开启「仅关单后发卡」，该订单未确认关闭，拦截发货' });
+          return { ok: false, blocked: true, riskRule: 'onlyCardAfterClose',
+            reason: '该订单未确认已关闭，按设置拦截发卡' };
+        }
       }
     }
 

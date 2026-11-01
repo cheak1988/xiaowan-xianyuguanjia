@@ -18,6 +18,7 @@
 const { ipcRenderer } = require('electron');
 
 const ORDER_NO_RE = /\b(\d{15,25})\b/;            // 闲鱼订单号通常是长数字
+const CLOSED_RE = /交易关闭|已关闭|关闭交易|取消|退款成功|已退款|交易成功|交易完成|已完成/;
 const ITEM_ID_RE = /\bid[=:]\s*(\d{9,15})\b/i;
 const MONEY_RE = /[¥￥]\s*(\d+(?:\.\d+)?)/;
 const BUY_NUM_RE = /(?:x|×)\s*(\d{1,3})\b/;
@@ -364,6 +365,39 @@ async function receiveFlower({ orderNo }) {
   return { ok: false, uncertain: true, error: '已点击收花，平台结果未确认，请先人工核对' };
 }
 
+/** 风控自动关单：在订单页点「关闭交易」并核对状态变为已关闭 */
+async function closeOrder({ orderNo }) {
+  const row = findOrderRow(orderNo);
+  if (!row) return { ok: false, error: `页面上找不到订单 ${orderNo}` };
+  const statusText = textOf(row);
+  if (CLOSED_RE.test(statusText)) return { ok: true, reason: '订单已是关闭/取消状态，无需操作' };
+  if (!/待付款|等待买家付款/.test(statusText)) {
+    return { ok: false, uncertain: false, error: '订单不是待付款状态，不能关闭，请人工核对' };
+  }
+  let btn = clickButtonIn(row, [/关闭交易/, /^关闭订单$/, /关闭交易$/]);
+  if (!btn) {
+    // 有的版本按钮折叠在「更多」下拉里
+    const more = clickButtonIn(row, [/^更多$/, /更多操作/]);
+    if (more) {
+      more.click();
+      await new Promise((r) => setTimeout(r, 400));
+      btn = clickButtonIn(document.body, [/关闭交易/]);
+    }
+  }
+  if (!btn) return { ok: false, error: '没有找到「关闭交易」按钮', needManual: true };
+  btn.click();
+  // 可能弹出确认框
+  await new Promise((r) => setTimeout(r, 600));
+  const confirmBtn = clickButtonIn(document.body, [/^确定$/, /^确认$/, /^确定关闭$/]);
+  if (confirmBtn) confirmBtn.click();
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 400));
+    const updated = findOrderRow(orderNo);
+    if (updated && CLOSED_RE.test(textOf(updated))) return { ok: true, reason: '已核对订单关闭' };
+  }
+  return { ok: false, uncertain: true, error: '已点击关闭交易，平台结果未确认，请先人工核对' };
+}
+
 /* ------------------------------ 消息通道 ------------------------------ */
 
 ipcRenderer.on('order:ship', async (_e, payload) => {
@@ -408,6 +442,13 @@ ipcRenderer.on('order:receive-flower', async (_e, payload) => {
   try { res = await receiveFlower(payload || {}); }
   catch (e) { res = { ok: false, error: String(e && e.message || e) }; }
   ipcRenderer.send('order:action-result', { action: 'receive-flower', ...res, requestId: payload && payload.requestId });
+});
+
+ipcRenderer.on('order:close', async (_e, payload) => {
+  let res;
+  try { res = await closeOrder(payload || {}); }
+  catch (e) { res = { ok: false, error: String(e && e.message || e) }; }
+  ipcRenderer.send('order:action-result', { action: 'close', ...res, requestId: payload && payload.requestId });
 });
 
 function boot() {
